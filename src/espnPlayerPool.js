@@ -35,6 +35,7 @@ export function normalizeEspnPlayer(entry) {
     name: player.fullName,
     nflTeamId: player.proTeamId,
     position,
+    active: player.active ?? null,
     projectedPoints: projectedPoints(player),
     espnRank: draftRank(player),
     percentOwned: player.ownership?.percentOwned ?? null,
@@ -43,6 +44,18 @@ export function normalizeEspnPlayer(entry) {
     injuryStatus: player.injuryStatus ?? null,
     raw: entry,
   };
+}
+
+export function isDraftEligiblePlayer(player) {
+  if (!player?.position) return false;
+  if (player.active === false) return false;
+
+  // ESPN can retain projections for free agents after they leave an NFL roster.
+  // D/ST entries are team entities, while individual players must currently map
+  // to an NFL proTeamId greater than zero.
+  if (player.position !== 'DST' && !(Number(player.nflTeamId) > 0)) return false;
+
+  return true;
 }
 
 export async function fetchEspnPlayerPool({
@@ -87,5 +100,5 @@ export async function fetchEspnPlayerPool({
   }
 
   const data = await response.json();
-  return (data.players || []).map(normalizeEspnPlayer).filter((player) => player.position);
+  return (data.players || []).map(normalizeEspnPlayer).filter(isDraftEligiblePlayer);
 }
