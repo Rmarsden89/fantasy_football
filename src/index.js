@@ -3,8 +3,10 @@ import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
+const HELPER_VERSION = '0.2.0-position-priority';
+
 function printRecommendations(scored, pairs, count = 10) {
-  console.group('Fantasy Draft Helper');
+  console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
 
   const positionPriorities = scored.positionPriorities || {};
   console.log('Position priorities');
@@ -76,6 +78,7 @@ export async function startDraftHelper(overrides = {}) {
     },
   };
 
+  console.log(`Starting Fantasy Draft Helper ${HELPER_VERSION}`);
   console.log('Loading ESPN player pool...');
   const players = await fetchEspnPlayerPool({
     leagueId: config.leagueId,
@@ -98,6 +101,7 @@ export async function startDraftHelper(overrides = {}) {
     const pairs = recommendPairs(scored);
 
     window.__fantasyDraftHelper.state = {
+      version: HELPER_VERSION,
       draftedPicks,
       scored,
       pairs,
@@ -117,6 +121,7 @@ export async function startDraftHelper(overrides = {}) {
   watcher.start();
 
   window.__fantasyDraftHelper = {
+    version: HELPER_VERSION,
     config,
     players,
     watcher,
@@ -124,7 +129,7 @@ export async function startDraftHelper(overrides = {}) {
     recalculate,
     stop() {
       watcher.stop();
-      console.log('Fantasy Draft Helper stopped.');
+      console.log(`Fantasy Draft Helper ${HELPER_VERSION} stopped.`);
     },
   };
 
