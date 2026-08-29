@@ -50,22 +50,28 @@ export const LEAGUE_CONFIG = {
       DST: 8,
       K: 8,
     },
-    // Recommendation limits can be stricter than ESPN's roster limits.
-    // We do not want to spend roster spots on a third TE or duplicate DST/K.
     maxRecommendedByPosition: {
+      QB: 4,
+      RB: 6,
+      WR: 7,
       TE: 2,
       DST: 1,
       K: 1,
     },
+    saturation: {
+      QB: { softTarget: 3, multiplierAfterTarget: 0.18 },
+      RB: { softTarget: 5, multiplierAfterTarget: 0.30 },
+      WR: { softTarget: 5, multiplierAfterTarget: 0.75 },
+      TE: { softTarget: 2, multiplierAfterTarget: 0 },
+      DST: { softTarget: 1, multiplierAfterTarget: 0 },
+      K: { softTarget: 1, multiplierAfterTarget: 0 },
+    },
     tightEndStrategy: {
-      // A TE already rostered in the top five projected TEs is treated as an
-      // elite starter. Once we have one, TE depth should become a very low need.
       elitePositionRank: 5,
       eliteStarterPriorityCap: 8,
       normalStarterPriorityCap: 20,
+      backupEarliestRound: 10,
     },
-    // Special teams are required starters, but they should not compete with
-    // core skill-position depth until the late rounds of an 18-round draft.
     specialTeamsEarliestRound: {
       DST: 14,
       K: 15,
@@ -78,12 +84,49 @@ export const LEAGUE_CONFIG = {
       opponentDemand: 0.10,
       turnPressure: 0.10,
     },
-    playerWeights: {
-      positionPriority: 0.58,
-      vor: 0.17,
-      withinPositionValue: 0.13,
-      tierDrop: 0.05,
-      turnRisk: 0.07,
+    consensus: {
+      sourceWeights: {
+        espnRank: 0.35,
+        marketAdp: 0.25,
+        fantasyPros: 0.40,
+      },
+      rankCeiling: 240,
+    },
+    phaseWeights: {
+      early: {
+        throughRound: 6,
+        positionPriority: 0.54,
+        vor: 0.17,
+        withinPositionValue: 0.10,
+        consensusValue: 0.12,
+        upside: 0.00,
+        tierDrop: 0.04,
+        turnRisk: 0.03,
+      },
+      middle: {
+        throughRound: 11,
+        positionPriority: 0.48,
+        vor: 0.14,
+        withinPositionValue: 0.09,
+        consensusValue: 0.12,
+        upside: 0.08,
+        tierDrop: 0.04,
+        turnRisk: 0.05,
+      },
+      late: {
+        positionPriority: 0.40,
+        vor: 0.10,
+        withinPositionValue: 0.07,
+        consensusValue: 0.12,
+        upside: 0.22,
+        tierDrop: 0.03,
+        turnRisk: 0.06,
+      },
+    },
+    byeTiebreaker: {
+      scoreWindow: 2.0,
+      conflictPenalty: 25,
+      maxConflictsCounted: 3,
     },
   },
 };
