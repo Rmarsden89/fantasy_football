@@ -95,7 +95,6 @@ function opponentDemand(position, draftedPicks, myTeamName, config) {
     if ((counts[position] || 0) < (config.roster[position] || 0)) teamsStillNeeding += 1;
   }
 
-  // Teams that have not appeared in draftedPicks yet should also be treated as needing starters.
   teamsStillNeeding += Math.max(opponentCount - byTeam.size, 0);
   return clamp((teamsStillNeeding / opponentCount) * 100);
 }
@@ -107,11 +106,21 @@ function positionTurnPressure(position, picksUntilNextTurn, draftedPicks, myTeam
   return clamp(demand * exposure * 100);
 }
 
+function earliestRoundForPosition(position, config) {
+  return config.strategy.specialTeamsEarliestRound?.[position] ?? 1;
+}
+
+function isPositionEligible(position, currentRound, config) {
+  if (!['DST', 'K'].includes(position)) return true;
+  return currentRound >= earliestRoundForPosition(position, config);
+}
+
 export function computePositionPriorities({
   draftedPicks,
   myTeamName,
   config,
   picksUntilNextTurn = 0,
+  currentRound = 1,
 }) {
   const myPicks = draftedPicks.filter((pick) => pick.fantasyTeam === myTeamName);
   const counts = rosterCounts(myPicks);
@@ -134,14 +143,19 @@ export function computePositionPriorities({
       ),
     };
 
-    const priority = Object.entries(weights).reduce(
+    const rawPriority = Object.entries(weights).reduce(
       (total, [key, weight]) => total + (components[key] || 0) * weight,
       0,
     );
+    const eligible = isPositionEligible(position, currentRound, config);
+    const priority = eligible ? rawPriority : 0;
 
     priorities[position] = {
       position,
       priority: Number(priority.toFixed(2)),
+      rawPriority: Number(rawPriority.toFixed(2)),
+      eligible,
+      eligibleRound: earliestRoundForPosition(position, config),
       have: counts[position] || 0,
       required: config.roster[position] || 0,
       components,
@@ -234,17 +248,23 @@ export function scoreAvailablePlayers({
   myOverallPicks = [],
 }) {
   const state = buildDraftState({ players, draftedPicks, myTeamName });
-  const availableByPosition = sortByPosition(state.available);
   const turn = getPicksUntilNextTurn(state.lastOverallPick, myOverallPicks);
+  const targetOverallPick = turn.nextPick ?? Math.max(state.lastOverallPick + 1, 1);
+  const currentRound = Math.floor((targetOverallPick - 1) / config.teams) + 1;
+  const eligibleAvailable = state.available.filter((player) =>
+    isPositionEligible(normalizePosition(player.position), currentRound, config),
+  );
+  const availableByPosition = sortByPosition(eligibleAvailable);
   const positionPriorities = computePositionPriorities({
     draftedPicks,
     myTeamName,
     config,
     picksUntilNextTurn: turn.picksUntil,
+    currentRound,
   });
   const weights = config.strategy.playerWeights;
 
-  const scored = state.available.map((player) => {
+  const scored = eligibleAvailable.map((player) => {
     const position = normalizePosition(player.position);
     const positionPlayers = availableByPosition[position] || [];
     const positionPriority = positionPriorities[position]?.priority || 0;
@@ -271,12 +291,14 @@ export function scoreAvailablePlayers({
       draftScore: Number(draftScore.toFixed(2)),
       components,
       positionPriority,
+      currentRound,
       nextPick: turn.nextPick,
       picksUntilNextTurn: turn.picksUntil,
     };
   }).sort((a, b) => b.draftScore - a.draftScore);
 
   scored.positionPriorities = positionPriorities;
+  scored.currentRound = currentRound;
   return scored;
 }
 
