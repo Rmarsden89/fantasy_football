@@ -1,0 +1,13 @@
+{
+  "name": "fantasy-football-draft-helper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --format=iife --global-name=FantasyDraftHelper --outfile=dist/draft-helper.js",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
