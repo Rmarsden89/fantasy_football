@@ -44,6 +44,12 @@ function starterNeed(position, counts, config) {
 
 function flexNeed(position, counts, config) {
   if (!FLEX_POSITIONS.has(position) || !config.roster.FLEX) return 0;
+
+  // TE can technically fill FLEX, but after we have our starting TE we do not
+  // want an open FLEX slot to manufacture another major TE need. RB/WR should
+  // generally fill that roster pressure instead.
+  if (position === 'TE' && (counts.TE || 0) >= config.roster.TE) return 0;
+
   const missingFlex = Math.max(config.roster.FLEX - flexFilled(counts, config), 0);
   return missingFlex > 0 ? 100 : 0;
 }
@@ -63,8 +69,8 @@ function depthNeed(position, counts, config) {
   }
   if (position === 'TE') {
     if (have < config.roster.TE) return 100;
-    if (have === config.roster.TE) return 20;
-    return 5;
+    if (have === config.roster.TE) return 8;
+    return 0;
   }
   if (position === 'DST') return have < config.roster.DST ? 20 : 0;
   if (position === 'K') return have < config.roster.K ? 10 : 0;
@@ -110,15 +116,57 @@ function earliestRoundForPosition(position, config) {
   return config.strategy.specialTeamsEarliestRound?.[position] ?? 1;
 }
 
-function isPositionEligible(position, currentRound, config) {
-  if (!['DST', 'K'].includes(position)) return true;
-  return currentRound >= earliestRoundForPosition(position, config);
+function maxRecommendedForPosition(position, config) {
+  return config.strategy.maxRecommendedByPosition?.[position] ?? Infinity;
+}
+
+function isPositionEligible(position, currentRound, config, counts = {}) {
+  if (['DST', 'K'].includes(position) && currentRound < earliestRoundForPosition(position, config)) {
+    return false;
+  }
+  return (counts[position] || 0) < maxRecommendedForPosition(position, config);
+}
+
+function findPlayerForPick(pick, players) {
+  return players.find((player) =>
+    (pick.playerId && player.id === pick.playerId) ||
+    (pick.playerName && player.name?.toLowerCase() === pick.playerName.toLowerCase()),
+  );
+}
+
+function bestRosterTePositionRank(myPicks, players) {
+  const rosteredTeIds = new Set(
+    myPicks
+      .filter((pick) => normalizePosition(pick.position) === 'TE')
+      .map((pick) => findPlayerForPick(pick, players)?.id)
+      .filter(Boolean),
+  );
+  if (!rosteredTeIds.size) return null;
+
+  const rankedTes = players
+    .filter((player) => normalizePosition(player.position) === 'TE')
+    .sort((a, b) => {
+      if (Number.isFinite(a.projectedPoints) && Number.isFinite(b.projectedPoints)) {
+        return b.projectedPoints - a.projectedPoints;
+      }
+      if (Number.isFinite(a.espnRank) && Number.isFinite(b.espnRank)) {
+        return a.espnRank - b.espnRank;
+      }
+      return 0;
+    });
+
+  let bestRank = Infinity;
+  rankedTes.forEach((player, index) => {
+    if (rosteredTeIds.has(player.id)) bestRank = Math.min(bestRank, index + 1);
+  });
+  return Number.isFinite(bestRank) ? bestRank : null;
 }
 
 export function computePositionPriorities({
   draftedPicks,
   myTeamName,
   config,
+  players = [],
   picksUntilNextTurn = 0,
   currentRound = 1,
 }) {
@@ -126,6 +174,7 @@ export function computePositionPriorities({
   const counts = rosterCounts(myPicks);
   const weights = config.strategy.positionWeights;
   const priorities = {};
+  const bestTeRank = bestRosterTePositionRank(myPicks, players);
 
   for (const position of ['QB', 'RB', 'WR', 'TE', 'DST', 'K']) {
     const components = {
@@ -147,8 +196,20 @@ export function computePositionPriorities({
       (total, [key, weight]) => total + (components[key] || 0) * weight,
       0,
     );
-    const eligible = isPositionEligible(position, currentRound, config);
-    const priority = eligible ? rawPriority : 0;
+    const eligible = isPositionEligible(position, currentRound, config, counts);
+    let priority = eligible ? rawPriority : 0;
+
+    // Tight-end roster construction is intentionally conservative. Once a TE
+    // starter is filled, the position drops sharply. If that starter is already
+    // a top-five projected TE, TE2 is only a luxury. A third TE is never eligible.
+    if (position === 'TE' && (counts.TE || 0) >= 1 && eligible) {
+      const teStrategy = config.strategy.tightEndStrategy || {};
+      const elite = Number.isFinite(bestTeRank) && bestTeRank <= (teStrategy.elitePositionRank ?? 5);
+      const cap = elite
+        ? (teStrategy.eliteStarterPriorityCap ?? 8)
+        : (teStrategy.normalStarterPriorityCap ?? 20);
+      priority = Math.min(priority, cap);
+    }
 
     priorities[position] = {
       position,
@@ -158,6 +219,7 @@ export function computePositionPriorities({
       eligibleRound: earliestRoundForPosition(position, config),
       have: counts[position] || 0,
       required: config.roster[position] || 0,
+      bestRosterTePositionRank: position === 'TE' ? bestTeRank : null,
       components,
     };
   }
@@ -251,14 +313,16 @@ export function scoreAvailablePlayers({
   const turn = getPicksUntilNextTurn(state.lastOverallPick, myOverallPicks);
   const targetOverallPick = turn.nextPick ?? Math.max(state.lastOverallPick + 1, 1);
   const currentRound = Math.floor((targetOverallPick - 1) / config.teams) + 1;
+  const counts = rosterCounts(state.myPicks);
   const eligibleAvailable = state.available.filter((player) =>
-    isPositionEligible(normalizePosition(player.position), currentRound, config),
+    isPositionEligible(normalizePosition(player.position), currentRound, config, counts),
   );
   const availableByPosition = sortByPosition(eligibleAvailable);
   const positionPriorities = computePositionPriorities({
     draftedPicks,
     myTeamName,
     config,
+    players,
     picksUntilNextTurn: turn.picksUntil,
     currentRound,
   });
@@ -310,6 +374,11 @@ export function recommendPairs(scoredPlayers, limit = 14) {
     for (let j = i + 1; j < candidates.length; j += 1) {
       const first = candidates[i];
       const second = candidates[j];
+
+      // Avoid spending both sides of a turn on TE. If the first TE is strong,
+      // the second should immediately become a low-priority luxury pick.
+      if (first.position === 'TE' && second.position === 'TE') continue;
+
       let synergy = 0;
       const firstNeed = first.components.positionPriority || 0;
       const secondNeed = second.components.positionPriority || 0;
