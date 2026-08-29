@@ -50,6 +50,12 @@ export const LEAGUE_CONFIG = {
       DST: 8,
       K: 8,
     },
+    // Special teams are required starters, but they should not compete with
+    // core skill-position depth until the late rounds of an 18-round draft.
+    specialTeamsEarliestRound: {
+      DST: 14,
+      K: 15,
+    },
     positionWeights: {
       starterNeed: 0.50,
       flexNeed: 0.10,
