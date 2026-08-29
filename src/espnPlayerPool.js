@@ -49,7 +49,7 @@ export async function fetchEspnPlayerPool({
   leagueId,
   season,
   limit = 1000,
-  endpointHost = 'https://fantasy.espn.com',
+  endpointHost = 'https://lm-api-reads.fantasy.espn.com',
 } = {}) {
   if (!leagueId || !season) {
     throw new Error('leagueId and season are required');
@@ -66,10 +66,9 @@ export async function fetchEspnPlayerPool({
     players: {
       filterSlotIds: { value: [0, 2, 4, 6, 16, 17, 23] },
       limit,
-      sortDraftRanks: {
+      sortPercOwned: {
         sortPriority: 1,
-        sortAsc: true,
-        value: 'SUPERFLEX',
+        sortAsc: false,
       },
       filterRanksForScoringPeriodIds: { value: [1] },
       filterRanksForRankTypes: { value: ['SUPERFLEX', 'PPR', 'STANDARD'] },
