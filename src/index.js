@@ -3,21 +3,45 @@ import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
-function printRecommendations(scored, pairs, count = 8) {
+function printRecommendations(scored, pairs, count = 10) {
   console.group('Fantasy Draft Helper');
+
+  const positionPriorities = scored.positionPriorities || {};
+  console.log('Position priorities');
   console.table(
-    scored.slice(0, count).map((player) => ({
-      rank: scored.indexOf(player) + 1,
+    Object.values(positionPriorities)
+      .sort((a, b) => b.priority - a.priority)
+      .map((item) => ({
+        position: item.position,
+        priority: item.priority,
+        have: item.have,
+        required: item.required,
+        starterNeed: Number(item.components.starterNeed.toFixed(1)),
+        flexNeed: Number(item.components.flexNeed.toFixed(1)),
+        depthNeed: Number(item.components.depthNeed.toFixed(1)),
+        depletion: Number(item.components.depletion.toFixed(1)),
+        opponentDemand: Number(item.components.opponentDemand.toFixed(1)),
+        turnPressure: Number(item.components.turnPressure.toFixed(1)),
+      })),
+  );
+
+  console.log('Recommended players');
+  console.table(
+    scored.slice(0, count).map((player, index) => ({
+      rank: index + 1,
       player: player.name,
       position: player.position,
+      positionPriority: Number(player.positionPriority.toFixed(1)),
       projected: player.projectedPoints,
       espnRank: player.espnRank,
       score: player.draftScore,
+      vor: Number(player.components.vor.toFixed(1)),
+      tierDrop: Number(player.components.tierDrop.toFixed(1)),
       turnRisk: Number(player.components.turnRisk.toFixed(1)),
-      rosterNeed: Number(player.components.rosterNeed.toFixed(1)),
     })),
   );
 
+  console.log('Best turn pairs');
   console.table(
     pairs.slice(0, 5).map((pair, index) => ({
       rank: index + 1,
@@ -37,9 +61,13 @@ export async function startDraftHelper(overrides = {}) {
     strategy: {
       ...LEAGUE_CONFIG.strategy,
       ...(overrides.strategy || {}),
-      weights: {
-        ...LEAGUE_CONFIG.strategy.weights,
-        ...(overrides.strategy?.weights || {}),
+      positionWeights: {
+        ...LEAGUE_CONFIG.strategy.positionWeights,
+        ...(overrides.strategy?.positionWeights || {}),
+      },
+      playerWeights: {
+        ...LEAGUE_CONFIG.strategy.playerWeights,
+        ...(overrides.strategy?.playerWeights || {}),
       },
       replacementRanks: {
         ...LEAGUE_CONFIG.strategy.replacementRanks,
@@ -73,6 +101,7 @@ export async function startDraftHelper(overrides = {}) {
       draftedPicks,
       scored,
       pairs,
+      positionPriorities: scored.positionPriorities,
       myOverallPicks,
     };
 
