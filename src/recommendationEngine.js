@@ -29,9 +29,9 @@ function rosterCounts(picks) {
 function flexFilled(counts, config) {
   return Math.max(
     0,
-    (counts.RB || 0) - config.roster.RB +
-      (counts.WR || 0) - config.roster.WR +
-      (counts.TE || 0) - config.roster.TE,
+    Math.max((counts.RB || 0) - config.roster.RB, 0) +
+      Math.max((counts.WR || 0) - config.roster.WR, 0) +
+      Math.max((counts.TE || 0) - config.roster.TE, 0),
   );
 }
 
@@ -44,12 +44,7 @@ function starterNeed(position, counts, config) {
 
 function flexNeed(position, counts, config) {
   if (!FLEX_POSITIONS.has(position) || !config.roster.FLEX) return 0;
-
-  // TE can technically fill FLEX, but after we have our starting TE we do not
-  // want an open FLEX slot to manufacture another major TE need. RB/WR should
-  // generally fill that roster pressure instead.
   if (position === 'TE' && (counts.TE || 0) >= config.roster.TE) return 0;
-
   const missingFlex = Math.max(config.roster.FLEX - flexFilled(counts, config), 0);
   return missingFlex > 0 ? 100 : 0;
 }
@@ -58,18 +53,28 @@ function depthNeed(position, counts, config) {
   const have = counts[position] || 0;
   if (position === 'QB') {
     if (have < config.roster.QB) return 100;
-    if (have === config.roster.QB) return 25;
-    if (have === config.roster.QB + 1) return 10;
+    if (have === config.roster.QB) return 35;
+    if (have === config.roster.QB + 1) return 2;
     return 0;
   }
-  if (position === 'RB' || position === 'WR') {
-    if (have < config.roster[position]) return 100;
-    if (have < config.roster[position] + 2) return 45;
-    return 20;
+  if (position === 'RB') {
+    if (have < config.roster.RB) return 100;
+    if (have === config.roster.RB) return 55;
+    if (have === config.roster.RB + 1) return 45;
+    if (have === config.roster.RB + 2) return 30;
+    if (have === config.roster.RB + 3) return 8;
+    return 0;
+  }
+  if (position === 'WR') {
+    if (have < config.roster.WR) return 100;
+    if (have === config.roster.WR) return 60;
+    if (have <= config.roster.WR + 2) return 50;
+    if (have === config.roster.WR + 3) return 35;
+    return 18;
   }
   if (position === 'TE') {
     if (have < config.roster.TE) return 100;
-    if (have === config.roster.TE) return 8;
+    if (have === config.roster.TE) return 10;
     return 0;
   }
   if (position === 'DST') return have < config.roster.DST ? 20 : 0;
@@ -85,7 +90,6 @@ function marketDepletion(position, draftedPicks, config) {
 
 function opponentDemand(position, draftedPicks, myTeamName, config) {
   if (!CORE_POSITIONS.includes(position)) return 0;
-
   const byTeam = new Map();
   for (const pick of draftedPicks) {
     if (!pick.fantasyTeam || pick.fantasyTeam === myTeamName) continue;
@@ -94,13 +98,11 @@ function opponentDemand(position, draftedPicks, myTeamName, config) {
     counts[pickPosition] = (counts[pickPosition] || 0) + 1;
     byTeam.set(pick.fantasyTeam, counts);
   }
-
   const opponentCount = Math.max(config.teams - 1, 1);
   let teamsStillNeeding = 0;
   for (const counts of byTeam.values()) {
     if ((counts[position] || 0) < (config.roster[position] || 0)) teamsStillNeeding += 1;
   }
-
   teamsStillNeeding += Math.max(opponentCount - byTeam.size, 0);
   return clamp((teamsStillNeeding / opponentCount) * 100);
 }
@@ -121,9 +123,7 @@ function maxRecommendedForPosition(position, config) {
 }
 
 function isPositionEligible(position, currentRound, config, counts = {}) {
-  if (['DST', 'K'].includes(position) && currentRound < earliestRoundForPosition(position, config)) {
-    return false;
-  }
+  if (['DST', 'K'].includes(position) && currentRound < earliestRoundForPosition(position, config)) return false;
   return (counts[position] || 0) < maxRecommendedForPosition(position, config);
 }
 
@@ -142,24 +142,22 @@ function bestRosterTePositionRank(myPicks, players) {
       .filter(Boolean),
   );
   if (!rosteredTeIds.size) return null;
-
   const rankedTes = players
     .filter((player) => normalizePosition(player.position) === 'TE')
-    .sort((a, b) => {
-      if (Number.isFinite(a.projectedPoints) && Number.isFinite(b.projectedPoints)) {
-        return b.projectedPoints - a.projectedPoints;
-      }
-      if (Number.isFinite(a.espnRank) && Number.isFinite(b.espnRank)) {
-        return a.espnRank - b.espnRank;
-      }
-      return 0;
-    });
-
+    .sort((a, b) => (b.projectedPoints ?? 0) - (a.projectedPoints ?? 0));
   let bestRank = Infinity;
   rankedTes.forEach((player, index) => {
     if (rosteredTeIds.has(player.id)) bestRank = Math.min(bestRank, index + 1);
   });
   return Number.isFinite(bestRank) ? bestRank : null;
+}
+
+function saturationMultiplier(position, counts, config) {
+  const settings = config.strategy.saturation?.[position];
+  if (!settings) return 1;
+  const have = counts[position] || 0;
+  if (have < settings.softTarget) return 1;
+  return settings.multiplierAfterTarget ?? 1;
 }
 
 export function computePositionPriorities({
@@ -183,15 +181,8 @@ export function computePositionPriorities({
       depthNeed: depthNeed(position, counts, config),
       depletion: marketDepletion(position, draftedPicks, config),
       opponentDemand: opponentDemand(position, draftedPicks, myTeamName, config),
-      turnPressure: positionTurnPressure(
-        position,
-        picksUntilNextTurn,
-        draftedPicks,
-        myTeamName,
-        config,
-      ),
+      turnPressure: positionTurnPressure(position, picksUntilNextTurn, draftedPicks, myTeamName, config),
     };
-
     const rawPriority = Object.entries(weights).reduce(
       (total, [key, weight]) => total + (components[key] || 0) * weight,
       0,
@@ -199,9 +190,6 @@ export function computePositionPriorities({
     const eligible = isPositionEligible(position, currentRound, config, counts);
     let priority = eligible ? rawPriority : 0;
 
-    // Tight-end roster construction is intentionally conservative. Once a TE
-    // starter is filled, the position drops sharply. If that starter is already
-    // a top-five projected TE, TE2 is only a luxury. A third TE is never eligible.
     if (position === 'TE' && (counts.TE || 0) >= 1 && eligible) {
       const teStrategy = config.strategy.tightEndStrategy || {};
       const elite = Number.isFinite(bestTeRank) && bestTeRank <= (teStrategy.elitePositionRank ?? 5);
@@ -209,7 +197,11 @@ export function computePositionPriorities({
         ? (teStrategy.eliteStarterPriorityCap ?? 8)
         : (teStrategy.normalStarterPriorityCap ?? 20);
       priority = Math.min(priority, cap);
+      if (currentRound < (teStrategy.backupEarliestRound ?? 10)) priority *= 0.25;
     }
+
+    const saturation = saturationMultiplier(position, counts, config);
+    priority *= saturation;
 
     priorities[position] = {
       position,
@@ -219,6 +211,7 @@ export function computePositionPriorities({
       eligibleRound: earliestRoundForPosition(position, config),
       have: counts[position] || 0,
       required: config.roster[position] || 0,
+      saturationMultiplier: saturation,
       bestRosterTePositionRank: position === 'TE' ? bestTeRank : null,
       components,
     };
@@ -235,10 +228,9 @@ function withinPositionValue(player, positionPlayers) {
   const projectionScore = projectionIndex < 0 || projected.length <= 1
     ? 50
     : 100 - (projectionIndex / (projected.length - 1)) * 100;
-
-  if (!Number.isFinite(player.espnRank)) return clamp(projectionScore);
-  const rankScore = clamp(105 - Math.min(player.espnRank, 105));
-  return clamp(projectionScore * 0.7 + rankScore * 0.3);
+  const consensusScore = Number.isFinite(player.consensusValue) ? player.consensusValue : null;
+  if (consensusScore === null) return clamp(projectionScore);
+  return clamp(projectionScore * 0.55 + consensusScore * 0.45);
 }
 
 function valueOverReplacement(player, positionPlayers, replacementRank) {
@@ -271,7 +263,9 @@ function tierDropScore(player, positionPlayers) {
 function estimateTurnRisk(player, picksUntilNextTurn, positionPlayers, positionPriority) {
   if (!Number.isFinite(picksUntilNextTurn) || picksUntilNextTurn <= 0) return 100;
   const group = [...positionPlayers].sort((a, b) => {
-    if (Number.isFinite(a.espnRank) && Number.isFinite(b.espnRank)) return a.espnRank - b.espnRank;
+    const aRank = a.consensusRank ?? a.espnRank;
+    const bRank = b.consensusRank ?? b.espnRank;
+    if (Number.isFinite(aRank) && Number.isFinite(bRank)) return aRank - bRank;
     return (b.projectedPoints ?? 0) - (a.projectedPoints ?? 0);
   });
   const rankWithinPosition = Math.max(group.findIndex((p) => p.id === player.id) + 1, 1);
@@ -281,6 +275,54 @@ function estimateTurnRisk(player, picksUntilNextTurn, positionPlayers, positionP
   return clamp(95 - (rankWithinPosition - expectedAtPosition) * 11, 5, 95);
 }
 
+function upsideScore(player, currentRound) {
+  let score = 30;
+  const outlook = String(player.seasonOutlook || '').toLowerCase();
+  const positiveTerms = [
+    ['sleeper', 20],
+    ['breakout', 20],
+    ['upside', 16],
+    ['high ceiling', 18],
+    ['lottery', 14],
+    ['emerge', 10],
+    ['rookie', 10],
+    ['starting role', 10],
+    ['featured', 10],
+  ];
+  const negativeTerms = [
+    ['low ceiling', -18],
+    ['limited ceiling', -15],
+    ['no more than', -10],
+    ['off the short-term fantasy radar', -25],
+    ['unlikely to be a fantasy option', -25],
+  ];
+  for (const [term, points] of positiveTerms) if (outlook.includes(term)) score += points;
+  for (const [term, points] of negativeTerms) if (outlook.includes(term)) score += points;
+
+  if (Number.isFinite(player.marketGap)) score += clamp(player.marketGap, -20, 40) * 0.75;
+  if (Number.isFinite(player.percentOwned) && player.percentOwned < 55 && currentRound >= 10) score += 8;
+  return clamp(score);
+}
+
+function byeTiebreakScore(player, myPicks, players, config) {
+  if (!Number.isFinite(player.byeWeek)) return 50;
+  let conflicts = 0;
+  for (const pick of myPicks) {
+    const rostered = findPlayerForPick(pick, players);
+    if (rostered?.byeWeek === player.byeWeek) conflicts += 1;
+  }
+  const settings = config.strategy.byeTiebreaker || {};
+  const counted = Math.min(conflicts, settings.maxConflictsCounted ?? 3);
+  return clamp(100 - counted * (settings.conflictPenalty ?? 25));
+}
+
+function phaseWeights(currentRound, config) {
+  const phases = config.strategy.phaseWeights || {};
+  if (currentRound <= (phases.early?.throughRound ?? 6)) return phases.early;
+  if (currentRound <= (phases.middle?.throughRound ?? 11)) return phases.middle;
+  return phases.late;
+}
+
 export function buildDraftState({ players, draftedPicks, myTeamName }) {
   const draftedIds = new Set(draftedPicks.filter((pick) => pick.playerId).map((pick) => pick.playerId));
   const draftedNames = new Set(draftedPicks.map((pick) => pick.playerName?.toLowerCase()).filter(Boolean));
@@ -288,12 +330,7 @@ export function buildDraftState({ players, draftedPicks, myTeamName }) {
     (player) => !draftedIds.has(player.id) && !draftedNames.has(player.name?.toLowerCase()),
   );
   const myPicks = draftedPicks.filter((pick) => pick.fantasyTeam === myTeamName);
-  return {
-    available,
-    myPicks,
-    draftedPicks,
-    lastOverallPick: draftedPicks.at(-1)?.overallPick || 0,
-  };
+  return { available, myPicks, draftedPicks, lastOverallPick: draftedPicks.at(-1)?.overallPick || 0 };
 }
 
 export function getPicksUntilNextTurn(lastOverallPick, myOverallPicks) {
@@ -326,28 +363,29 @@ export function scoreAvailablePlayers({
     picksUntilNextTurn: turn.picksUntil,
     currentRound,
   });
-  const weights = config.strategy.playerWeights;
+  const weights = phaseWeights(currentRound, config);
 
   const scored = eligibleAvailable.map((player) => {
     const position = normalizePosition(player.position);
     const positionPlayers = availableByPosition[position] || [];
     const positionPriority = positionPriorities[position]?.priority || 0;
+    const saturation = positionPriorities[position]?.saturationMultiplier ?? 1;
     const components = {
       positionPriority,
       withinPositionValue: withinPositionValue(player, positionPlayers),
-      vor: valueOverReplacement(
-        player,
-        positionPlayers,
-        config.strategy.replacementRanks[position] || 8,
-      ),
+      vor: valueOverReplacement(player, positionPlayers, config.strategy.replacementRanks[position] || 8),
+      consensusValue: Number.isFinite(player.consensusValue) ? player.consensusValue : 50,
+      upside: upsideScore(player, currentRound),
       tierDrop: tierDropScore(player, positionPlayers),
       turnRisk: estimateTurnRisk(player, turn.picksUntil, positionPlayers, positionPriority),
+      byeTiebreak: byeTiebreakScore(player, state.myPicks, players, config),
     };
 
-    const draftScore = Object.entries(weights).reduce(
+    const baseScore = Object.entries(weights || {}).reduce(
       (total, [key, weight]) => total + (components[key] || 0) * weight,
       0,
     );
+    const draftScore = baseScore * saturation;
 
     return {
       ...player,
@@ -355,40 +393,44 @@ export function scoreAvailablePlayers({
       draftScore: Number(draftScore.toFixed(2)),
       components,
       positionPriority,
+      saturationMultiplier: saturation,
       currentRound,
       nextPick: turn.nextPick,
       picksUntilNextTurn: turn.picksUntil,
     };
-  }).sort((a, b) => b.draftScore - a.draftScore);
+  });
+
+  const tieWindow = config.strategy.byeTiebreaker?.scoreWindow ?? 2;
+  scored.sort((a, b) => {
+    const delta = b.draftScore - a.draftScore;
+    if (Math.abs(delta) > tieWindow) return delta;
+    const byeDelta = b.components.byeTiebreak - a.components.byeTiebreak;
+    if (byeDelta !== 0) return byeDelta;
+    const upsideDelta = b.components.upside - a.components.upside;
+    if (upsideDelta !== 0) return upsideDelta;
+    return delta;
+  });
 
   scored.positionPriorities = positionPriorities;
   scored.currentRound = currentRound;
+  scored.phaseWeights = weights;
   return scored;
 }
 
 export function recommendPairs(scoredPlayers, limit = 14) {
   const candidates = scoredPlayers.slice(0, limit);
   const pairs = [];
-
   for (let i = 0; i < candidates.length; i += 1) {
     for (let j = i + 1; j < candidates.length; j += 1) {
       const first = candidates[i];
       const second = candidates[j];
-
-      // Avoid spending both sides of a turn on TE. If the first TE is strong,
-      // the second should immediately become a low-priority luxury pick.
       if (first.position === 'TE' && second.position === 'TE') continue;
-
+      if (first.position === 'QB' && second.position === 'QB' && first.saturationMultiplier < 1) continue;
       let synergy = 0;
-      const firstNeed = first.components.positionPriority || 0;
-      const secondNeed = second.components.positionPriority || 0;
-
-      if (first.position !== second.position) synergy += 5;
-      if (first.position === second.position && Math.min(firstNeed, secondNeed) < 70) synergy -= 8;
+      if (first.position !== second.position) synergy += 4;
+      if (first.components.upside >= 70) synergy += 2;
+      if (second.components.upside >= 70) synergy += 2;
       if (['DST', 'K'].includes(first.position) || ['DST', 'K'].includes(second.position)) synergy -= 15;
-      if (firstNeed >= 80) synergy += 3;
-      if (secondNeed >= 80) synergy += 3;
-
       pairs.push({
         first,
         second,
@@ -396,7 +438,6 @@ export function recommendPairs(scoredPlayers, limit = 14) {
       });
     }
   }
-
   return pairs.sort((a, b) => b.pairScore - a.pairScore);
 }
 
