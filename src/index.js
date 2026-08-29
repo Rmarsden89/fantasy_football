@@ -1,12 +1,14 @@
 import { LEAGUE_CONFIG, getMySnakePicks } from './config.js';
+import { applyConsensusModel } from './consensusModel.js';
 import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
-const HELPER_VERSION = '0.2.1-position-priority-logging';
+const HELPER_VERSION = '0.3.0-consensus-upside';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
+  console.log(`Round ${scored.currentRound} scoring phase`, scored.phaseWeights);
 
   const positionPriorities = scored.positionPriorities || {};
   console.log('Position priorities');
@@ -18,6 +20,7 @@ function printRecommendations(scored, pairs, count = 10) {
         priority: item.priority,
         have: item.have,
         required: item.required,
+        saturation: item.saturationMultiplier,
         starterNeed: Number(item.components.starterNeed.toFixed(1)),
         flexNeed: Number(item.components.flexNeed.toFixed(1)),
         depthNeed: Number(item.components.depthNeed.toFixed(1)),
@@ -33,13 +36,17 @@ function printRecommendations(scored, pairs, count = 10) {
       rank: index + 1,
       player: player.name,
       position: player.position,
-      positionPriority: Number(player.positionPriority.toFixed(1)),
-      projected: player.projectedPoints,
-      espnRank: player.espnRank,
+      bye: player.byeWeek,
       score: player.draftScore,
+      positionPriority: Number(player.positionPriority.toFixed(1)),
+      consensusRank: player.consensusRank,
+      sources: player.consensusSourceCount,
+      projected: player.projectedPoints,
+      adp: player.averageDraftPosition,
+      upside: Number(player.components.upside.toFixed(1)),
       vor: Number(player.components.vor.toFixed(1)),
-      tierDrop: Number(player.components.tierDrop.toFixed(1)),
-      turnRisk: Number(player.components.turnRisk.toFixed(1)),
+      byeTie: Number(player.components.byeTiebreak.toFixed(1)),
+      saturation: player.saturationMultiplier,
     })),
   );
 
@@ -96,6 +103,7 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
       priority: item.priority,
       have: item.have,
       required: item.required,
+      saturationMultiplier: item.saturationMultiplier,
       ...item.components,
     }));
 
@@ -104,11 +112,17 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     playerId: player.id,
     playerName: player.name,
     position: player.position,
+    byeWeek: player.byeWeek,
     projectedPoints: player.projectedPoints,
     espnRank: player.espnRank,
     averageDraftPosition: player.averageDraftPosition,
+    consensusRank: player.consensusRank,
+    consensusValue: player.consensusValue,
+    consensusSourceCount: player.consensusSourceCount,
+    marketGap: player.marketGap,
     draftScore: player.draftScore,
     positionPriority: player.positionPriority,
+    saturationMultiplier: player.saturationMultiplier,
     ...player.components,
   }));
 
@@ -127,6 +141,8 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     lastPick,
     nextPick,
     picksUntilNextTurn,
+    currentRound: scored.currentRound,
+    scoringPhaseWeights: scored.phaseWeights,
     myRoster,
     positionPriorities,
     recommendations,
@@ -136,54 +152,30 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
 
 function historyToCsv(history) {
   const headers = [
-    'timestamp',
-    'afterOverallPick',
-    'nextPick',
-    'picksUntilNextTurn',
-    'recommendationRank',
-    'playerId',
-    'playerName',
-    'position',
-    'draftScore',
-    'positionPriority',
-    'projectedPoints',
-    'espnRank',
-    'averageDraftPosition',
-    'vor',
-    'withinPositionValue',
-    'tierDrop',
-    'turnRisk',
+    'timestamp', 'afterOverallPick', 'nextPick', 'picksUntilNextTurn', 'currentRound',
+    'recommendationRank', 'playerId', 'playerName', 'position', 'byeWeek', 'draftScore',
+    'positionPriority', 'saturationMultiplier', 'projectedPoints', 'espnRank',
+    'averageDraftPosition', 'consensusRank', 'consensusValue', 'consensusSourceCount',
+    'marketGap', 'upside', 'vor', 'withinPositionValue', 'tierDrop', 'turnRisk', 'byeTiebreak',
   ];
-
   const rows = [headers.join(',')];
   for (const snapshot of history) {
     for (const rec of snapshot.recommendations) {
       rows.push([
-        snapshot.timestamp,
-        snapshot.afterOverallPick,
-        snapshot.nextPick,
-        snapshot.picksUntilNextTurn,
-        rec.rank,
-        rec.playerId,
-        rec.playerName,
-        rec.position,
-        rec.draftScore,
-        rec.positionPriority,
-        rec.projectedPoints,
-        rec.espnRank,
-        rec.averageDraftPosition,
-        rec.vor,
-        rec.withinPositionValue,
-        rec.tierDrop,
-        rec.turnRisk,
+        snapshot.timestamp, snapshot.afterOverallPick, snapshot.nextPick,
+        snapshot.picksUntilNextTurn, snapshot.currentRound, rec.rank, rec.playerId,
+        rec.playerName, rec.position, rec.byeWeek, rec.draftScore, rec.positionPriority,
+        rec.saturationMultiplier, rec.projectedPoints, rec.espnRank, rec.averageDraftPosition,
+        rec.consensusRank, rec.consensusValue, rec.consensusSourceCount, rec.marketGap,
+        rec.upside, rec.vor, rec.withinPositionValue, rec.tierDrop, rec.turnRisk, rec.byeTiebreak,
       ].map(csvEscape).join(','));
     }
   }
   return rows.join('\n');
 }
 
-export async function startDraftHelper(overrides = {}) {
-  const config = {
+function mergeConfig(overrides = {}) {
+  return {
     ...LEAGUE_CONFIG,
     ...overrides,
     roster: { ...LEAGUE_CONFIG.roster, ...(overrides.roster || {}) },
@@ -194,24 +186,44 @@ export async function startDraftHelper(overrides = {}) {
         ...LEAGUE_CONFIG.strategy.positionWeights,
         ...(overrides.strategy?.positionWeights || {}),
       },
-      playerWeights: {
-        ...LEAGUE_CONFIG.strategy.playerWeights,
-        ...(overrides.strategy?.playerWeights || {}),
-      },
       replacementRanks: {
         ...LEAGUE_CONFIG.strategy.replacementRanks,
         ...(overrides.strategy?.replacementRanks || {}),
       },
+      consensus: {
+        ...LEAGUE_CONFIG.strategy.consensus,
+        ...(overrides.strategy?.consensus || {}),
+        sourceWeights: {
+          ...LEAGUE_CONFIG.strategy.consensus.sourceWeights,
+          ...(overrides.strategy?.consensus?.sourceWeights || {}),
+        },
+      },
+      phaseWeights: {
+        ...LEAGUE_CONFIG.strategy.phaseWeights,
+        ...(overrides.strategy?.phaseWeights || {}),
+      },
     },
   };
+}
 
+export async function startDraftHelper(overrides = {}) {
+  const config = mergeConfig(overrides);
   console.log(`Starting Fantasy Draft Helper ${HELPER_VERSION}`);
   console.log('Loading ESPN player pool...');
-  const players = await fetchEspnPlayerPool({
-    leagueId: config.leagueId,
-    season: config.season,
+  const espnPlayers = await fetchEspnPlayerPool({ leagueId: config.leagueId, season: config.season });
+
+  // Optional external ranking input. Example:
+  // window.__fantasyConsensusData = {
+  //   fantasyPros: { byName: { 'ja\'marr chase': 3, 'patrick mahomes': 24 } }
+  // };
+  const externalRankings = overrides.externalRankings || window.__fantasyConsensusData || {};
+  const players = applyConsensusModel(espnPlayers, {
+    sourceWeights: config.strategy.consensus.sourceWeights,
+    rankCeiling: config.strategy.consensus.rankCeiling,
+    externalRankings,
   });
-  console.log(`Loaded ${players.length} ESPN players.`);
+  const externalSources = Object.keys(externalRankings);
+  console.log(`Loaded ${players.length} players. Consensus sources: ESPN rank, market ADP${externalSources.length ? `, ${externalSources.join(', ')}` : ''}.`);
 
   const myOverallPicks = getMySnakePicks(18, config);
   const history = [];
@@ -219,27 +231,12 @@ export async function startDraftHelper(overrides = {}) {
 
   const recalculate = () => {
     const draftedPicks = watcher.getPicks();
-    const scored = scoreAvailablePlayers({
-      players,
-      draftedPicks,
-      myTeamName: config.myTeamName,
-      config,
-      myOverallPicks,
-    });
+    const scored = scoreAvailablePlayers({ players, draftedPicks, myTeamName: config.myTeamName, config, myOverallPicks });
     const pairs = recommendPairs(scored);
-    const snapshot = buildHistorySnapshot({
-      draftedPicks,
-      scored,
-      pairs,
-      myTeamName: config.myTeamName,
-    });
-
+    const snapshot = buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName: config.myTeamName });
     const prior = history.at(-1);
-    if (!prior || prior.afterOverallPick !== snapshot.afterOverallPick) {
-      history.push(snapshot);
-    } else {
-      history[history.length - 1] = snapshot;
-    }
+    if (!prior || prior.afterOverallPick !== snapshot.afterOverallPick) history.push(snapshot);
+    else history[history.length - 1] = snapshot;
 
     window.__fantasyDraftHelper.state = {
       version: HELPER_VERSION,
@@ -250,16 +247,11 @@ export async function startDraftHelper(overrides = {}) {
       myOverallPicks,
       history,
     };
-
     printRecommendations(scored, pairs);
     return window.__fantasyDraftHelper.state;
   };
 
-  watcher = createEspnDraftWatcher({
-    teams: config.teams,
-    onPick: () => recalculate(),
-  });
-
+  watcher = createEspnDraftWatcher({ teams: config.teams, onPick: () => recalculate() });
   watcher.start();
 
   window.__fantasyDraftHelper = {
@@ -274,6 +266,7 @@ export async function startDraftHelper(overrides = {}) {
       const payload = {
         version: HELPER_VERSION,
         exportedAt: new Date().toISOString(),
+        consensusSources: ['espnRank', 'marketAdp', ...externalSources],
         config,
         history,
         finalState: window.__fantasyDraftHelper.state,
@@ -295,6 +288,4 @@ export async function startDraftHelper(overrides = {}) {
   return window.__fantasyDraftHelper;
 }
 
-if (typeof window !== 'undefined') {
-  window.startFantasyDraftHelper = startDraftHelper;
-}
+if (typeof window !== 'undefined') window.startFantasyDraftHelper = startDraftHelper;
