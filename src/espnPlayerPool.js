@@ -1,3 +1,5 @@
+import { byeWeekForProTeamId } from './byeWeeks.js';
+
 const POSITION_BY_DEFAULT_ID = {
   1: 'QB',
   2: 'RB',
@@ -26,14 +28,15 @@ function draftRank(player) {
   return preferred?.rank ?? preferred?.auctionValue ?? null;
 }
 
-export function normalizeEspnPlayer(entry) {
+export function normalizeEspnPlayer(entry, season = 2026) {
   const player = entry.player || entry;
   const position = POSITION_BY_DEFAULT_ID[player.defaultPositionId] || null;
+  const nflTeamId = player.proTeamId;
 
   return {
     id: entry.id ?? player.id,
     name: player.fullName,
-    nflTeamId: player.proTeamId,
+    nflTeamId,
     position,
     active: player.active ?? null,
     projectedPoints: projectedPoints(player),
@@ -42,6 +45,9 @@ export function normalizeEspnPlayer(entry) {
     averageDraftPosition: player.ownership?.averageDraftPosition ?? null,
     auctionValueAverage: player.ownership?.auctionValueAverage ?? null,
     injuryStatus: player.injuryStatus ?? null,
+    seasonOutlook: player.seasonOutlook ?? '',
+    lastNewsDate: player.lastNewsDate ?? null,
+    byeWeek: byeWeekForProTeamId(nflTeamId, season),
     raw: entry,
   };
 }
@@ -100,5 +106,7 @@ export async function fetchEspnPlayerPool({
   }
 
   const data = await response.json();
-  return (data.players || []).map(normalizeEspnPlayer).filter(isDraftEligiblePlayer);
+  return (data.players || [])
+    .map((entry) => normalizeEspnPlayer(entry, season))
+    .filter(isDraftEligiblePlayer);
 }
