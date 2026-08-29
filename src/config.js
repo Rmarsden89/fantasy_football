@@ -50,13 +50,20 @@ export const LEAGUE_CONFIG = {
       DST: 8,
       K: 8,
     },
-    weights: {
-      baseValue: 0.35,
-      vor: 0.2,
-      scarcity: 0.15,
-      rosterNeed: 0.1,
-      tierDrop: 0.1,
-      turnRisk: 0.1,
+    positionWeights: {
+      starterNeed: 0.50,
+      flexNeed: 0.10,
+      depthNeed: 0.08,
+      depletion: 0.12,
+      opponentDemand: 0.10,
+      turnPressure: 0.10,
+    },
+    playerWeights: {
+      positionPriority: 0.58,
+      vor: 0.17,
+      withinPositionValue: 0.13,
+      tierDrop: 0.05,
+      turnRisk: 0.07,
     },
   },
 };
