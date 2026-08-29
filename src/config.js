@@ -50,6 +50,20 @@ export const LEAGUE_CONFIG = {
       DST: 8,
       K: 8,
     },
+    // Recommendation limits can be stricter than ESPN's roster limits.
+    // We do not want to spend roster spots on a third TE or duplicate DST/K.
+    maxRecommendedByPosition: {
+      TE: 2,
+      DST: 1,
+      K: 1,
+    },
+    tightEndStrategy: {
+      // A TE already rostered in the top five projected TEs is treated as an
+      // elite starter. Once we have one, TE depth should become a very low need.
+      elitePositionRank: 5,
+      eliteStarterPriorityCap: 8,
+      normalStarterPriorityCap: 20,
+    },
     // Special teams are required starters, but they should not compete with
     // core skill-position depth until the late rounds of an 18-round draft.
     specialTeamsEarliestRound: {
