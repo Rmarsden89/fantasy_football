@@ -1,137 +1,217 @@
 const STARTER_SLOTS = ['QB', 'QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX'];
+const CORE_POSITIONS = ['QB', 'RB', 'WR', 'TE'];
+const FLEX_POSITIONS = new Set(['RB', 'WR', 'TE']);
 
 function clamp(value, min = 0, max = 100) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizePosition(position) {
+  return position === 'D/ST' ? 'DST' : position;
+}
+
 function sortByPosition(players) {
   return players.reduce((groups, player) => {
-    (groups[player.position] ||= []).push(player);
+    const position = normalizePosition(player.position);
+    (groups[position] ||= []).push(player);
     return groups;
   }, {});
 }
 
 function rosterCounts(picks) {
   return picks.reduce((counts, pick) => {
-    const position = pick.position === 'D/ST' ? 'DST' : pick.position;
+    const position = normalizePosition(pick.position);
     counts[position] = (counts[position] || 0) + 1;
     return counts;
   }, {});
 }
 
-function baseValue(player, maxProjection) {
-  if (Number.isFinite(player.projectedPoints) && maxProjection > 0) {
-    return clamp((player.projectedPoints / maxProjection) * 100);
+function flexFilled(counts, config) {
+  return Math.max(
+    0,
+    (counts.RB || 0) - config.roster.RB +
+      (counts.WR || 0) - config.roster.WR +
+      (counts.TE || 0) - config.roster.TE,
+  );
+}
+
+function starterNeed(position, counts, config) {
+  const required = config.roster[position] || 0;
+  if (!required) return 0;
+  const missing = Math.max(required - (counts[position] || 0), 0);
+  return clamp((missing / required) * 100);
+}
+
+function flexNeed(position, counts, config) {
+  if (!FLEX_POSITIONS.has(position) || !config.roster.FLEX) return 0;
+  const missingFlex = Math.max(config.roster.FLEX - flexFilled(counts, config), 0);
+  return missingFlex > 0 ? 100 : 0;
+}
+
+function depthNeed(position, counts, config) {
+  const have = counts[position] || 0;
+  if (position === 'QB') {
+    if (have < config.roster.QB) return 100;
+    if (have === config.roster.QB) return 25;
+    if (have === config.roster.QB + 1) return 10;
+    return 0;
   }
-  if (Number.isFinite(player.espnRank)) {
-    return clamp(101 - player.espnRank);
+  if (position === 'RB' || position === 'WR') {
+    if (have < config.roster[position]) return 100;
+    if (have < config.roster[position] + 2) return 45;
+    return 20;
   }
+  if (position === 'TE') {
+    if (have < config.roster.TE) return 100;
+    if (have === config.roster.TE) return 20;
+    return 5;
+  }
+  if (position === 'DST') return have < config.roster.DST ? 20 : 0;
+  if (position === 'K') return have < config.roster.K ? 10 : 0;
   return 0;
+}
+
+function marketDepletion(position, draftedPicks, config) {
+  const drafted = draftedPicks.filter((pick) => normalizePosition(pick.position) === position).length;
+  const starterDemand = Math.max(config.teams * (config.roster[position] || 1), 1);
+  return clamp((drafted / starterDemand) * 100);
+}
+
+function opponentDemand(position, draftedPicks, myTeamName, config) {
+  if (!CORE_POSITIONS.includes(position)) return 0;
+
+  const byTeam = new Map();
+  for (const pick of draftedPicks) {
+    if (!pick.fantasyTeam || pick.fantasyTeam === myTeamName) continue;
+    const counts = byTeam.get(pick.fantasyTeam) || {};
+    const pickPosition = normalizePosition(pick.position);
+    counts[pickPosition] = (counts[pickPosition] || 0) + 1;
+    byTeam.set(pick.fantasyTeam, counts);
+  }
+
+  const opponentCount = Math.max(config.teams - 1, 1);
+  let teamsStillNeeding = 0;
+  for (const counts of byTeam.values()) {
+    if ((counts[position] || 0) < (config.roster[position] || 0)) teamsStillNeeding += 1;
+  }
+
+  // Teams that have not appeared in draftedPicks yet should also be treated as needing starters.
+  teamsStillNeeding += Math.max(opponentCount - byTeam.size, 0);
+  return clamp((teamsStillNeeding / opponentCount) * 100);
+}
+
+function positionTurnPressure(position, picksUntilNextTurn, draftedPicks, myTeamName, config) {
+  if (!Number.isFinite(picksUntilNextTurn) || picksUntilNextTurn <= 0) return 0;
+  const demand = opponentDemand(position, draftedPicks, myTeamName, config) / 100;
+  const exposure = Math.min(picksUntilNextTurn / Math.max(config.teams * 2 - 2, 1), 1);
+  return clamp(demand * exposure * 100);
+}
+
+export function computePositionPriorities({
+  draftedPicks,
+  myTeamName,
+  config,
+  picksUntilNextTurn = 0,
+}) {
+  const myPicks = draftedPicks.filter((pick) => pick.fantasyTeam === myTeamName);
+  const counts = rosterCounts(myPicks);
+  const weights = config.strategy.positionWeights;
+  const priorities = {};
+
+  for (const position of ['QB', 'RB', 'WR', 'TE', 'DST', 'K']) {
+    const components = {
+      starterNeed: starterNeed(position, counts, config),
+      flexNeed: flexNeed(position, counts, config),
+      depthNeed: depthNeed(position, counts, config),
+      depletion: marketDepletion(position, draftedPicks, config),
+      opponentDemand: opponentDemand(position, draftedPicks, myTeamName, config),
+      turnPressure: positionTurnPressure(
+        position,
+        picksUntilNextTurn,
+        draftedPicks,
+        myTeamName,
+        config,
+      ),
+    };
+
+    const priority = Object.entries(weights).reduce(
+      (total, [key, weight]) => total + (components[key] || 0) * weight,
+      0,
+    );
+
+    priorities[position] = {
+      position,
+      priority: Number(priority.toFixed(2)),
+      have: counts[position] || 0,
+      required: config.roster[position] || 0,
+      components,
+    };
+  }
+
+  return priorities;
+}
+
+function withinPositionValue(player, positionPlayers) {
+  const projected = positionPlayers
+    .filter((p) => Number.isFinite(p.projectedPoints))
+    .sort((a, b) => b.projectedPoints - a.projectedPoints);
+  const projectionIndex = projected.findIndex((p) => p.id === player.id);
+  const projectionScore = projectionIndex < 0 || projected.length <= 1
+    ? 50
+    : 100 - (projectionIndex / (projected.length - 1)) * 100;
+
+  if (!Number.isFinite(player.espnRank)) return clamp(projectionScore);
+  const rankScore = clamp(105 - Math.min(player.espnRank, 105));
+  return clamp(projectionScore * 0.7 + rankScore * 0.3);
 }
 
 function valueOverReplacement(player, positionPlayers, replacementRank) {
   if (!Number.isFinite(player.projectedPoints)) return 50;
-
   const sorted = [...positionPlayers]
     .filter((p) => Number.isFinite(p.projectedPoints))
     .sort((a, b) => b.projectedPoints - a.projectedPoints);
-
   if (!sorted.length) return 50;
-
   const replacementIndex = Math.min(Math.max(replacementRank - 1, 0), sorted.length - 1);
   const replacement = sorted[replacementIndex]?.projectedPoints ?? 0;
-  const best = sorted[0]?.projectedPoints ?? replacement;
-  const range = Math.max(best - replacement, 1);
+  const leader = sorted[0]?.projectedPoints ?? replacement;
+  const range = Math.max(leader - replacement, 1);
   return clamp(((player.projectedPoints - replacement) / range) * 100);
 }
 
-function scarcityScore(player, availableByPosition, config) {
-  const startersNeeded = {
-    QB: config.teams * config.roster.QB,
-    RB: config.teams * config.roster.RB,
-    WR: config.teams * config.roster.WR,
-    TE: config.teams * config.roster.TE,
-    DST: config.teams * config.roster.DST,
-    K: config.teams * config.roster.K,
-  };
-
-  const remaining = availableByPosition[player.position]?.length || 1;
-  const demand = startersNeeded[player.position] || config.teams;
-  return clamp((demand / remaining) * 100);
-}
-
-function rosterNeedScore(player, myPicks, config) {
-  const counts = rosterCounts(myPicks);
-  const needs = {
-    QB: config.roster.QB,
-    RB: config.roster.RB,
-    WR: config.roster.WR,
-    TE: config.roster.TE,
-    DST: config.roster.DST,
-    K: config.roster.K,
-  };
-
-  const required = needs[player.position] || 0;
-  const have = counts[player.position] || 0;
-
-  if (have < required) return 100;
-
-  if (['RB', 'WR', 'TE'].includes(player.position)) {
-    const flexFilled = Math.max(
-      0,
-      (counts.RB || 0) - config.roster.RB +
-        (counts.WR || 0) - config.roster.WR +
-        (counts.TE || 0) - config.roster.TE,
-    );
-    if (flexFilled < config.roster.FLEX) return 75;
-  }
-
-  if (player.position === 'QB' && have < 3) return 60;
-  if (['RB', 'WR'].includes(player.position)) return 50;
-  if (player.position === 'TE' && have < 2) return 40;
-  return 15;
-}
-
-function tierDropScore(player, availableByPosition) {
-  const group = [...(availableByPosition[player.position] || [])]
+function tierDropScore(player, positionPlayers) {
+  const group = [...positionPlayers]
     .filter((p) => Number.isFinite(p.projectedPoints))
     .sort((a, b) => b.projectedPoints - a.projectedPoints);
-
   const index = group.findIndex((p) => p.id === player.id);
-  if (index < 0 || index === group.length - 1) return 50;
-
+  if (index < 0 || index === group.length - 1) return 0;
   const current = group[index].projectedPoints;
   const next = group[index + 1]?.projectedPoints ?? current;
   const leader = group[0]?.projectedPoints ?? current;
   const floor = group.at(-1)?.projectedPoints ?? next;
   const range = Math.max(leader - floor, 1);
-  return clamp(((current - next) / range) * 500);
+  return clamp(((current - next) / range) * 600);
 }
 
-function estimateTurnRisk(player, picksUntilNextTurn, availableByPosition, opponentNeeds = {}) {
+function estimateTurnRisk(player, picksUntilNextTurn, positionPlayers, positionPriority) {
   if (!Number.isFinite(picksUntilNextTurn) || picksUntilNextTurn <= 0) return 100;
-
-  const group = availableByPosition[player.position] || [];
-  const rankWithinPosition = group.findIndex((p) => p.id === player.id) + 1;
-  const needPressure = opponentNeeds[player.position] ?? 0.5;
-  const expectedPositionPicks = Math.max(1, picksUntilNextTurn * needPressure);
-
-  if (rankWithinPosition <= expectedPositionPicks) return 95;
-
-  const distance = rankWithinPosition - expectedPositionPicks;
-  return clamp(95 - distance * 12, 5, 95);
+  const group = [...positionPlayers].sort((a, b) => {
+    if (Number.isFinite(a.espnRank) && Number.isFinite(b.espnRank)) return a.espnRank - b.espnRank;
+    return (b.projectedPoints ?? 0) - (a.projectedPoints ?? 0);
+  });
+  const rankWithinPosition = Math.max(group.findIndex((p) => p.id === player.id) + 1, 1);
+  const pressure = positionPriority / 100;
+  const expectedAtPosition = Math.max(1, picksUntilNextTurn * (0.1 + pressure * 0.35));
+  if (rankWithinPosition <= expectedAtPosition) return 95;
+  return clamp(95 - (rankWithinPosition - expectedAtPosition) * 11, 5, 95);
 }
 
 export function buildDraftState({ players, draftedPicks, myTeamName }) {
   const draftedIds = new Set(draftedPicks.filter((pick) => pick.playerId).map((pick) => pick.playerId));
-  const draftedNames = new Set(draftedPicks.map((pick) => pick.playerName.toLowerCase()));
-
+  const draftedNames = new Set(draftedPicks.map((pick) => pick.playerName?.toLowerCase()).filter(Boolean));
   const available = players.filter(
     (player) => !draftedIds.has(player.id) && !draftedNames.has(player.name?.toLowerCase()),
   );
-
   const myPicks = draftedPicks.filter((pick) => pick.fantasyTeam === myTeamName);
-
   return {
     available,
     myPicks,
@@ -152,53 +232,55 @@ export function scoreAvailablePlayers({
   myTeamName,
   config,
   myOverallPicks = [],
-  opponentNeeds = {},
 }) {
   const state = buildDraftState({ players, draftedPicks, myTeamName });
-  const availableByPosition = sortByPosition(
-    [...state.available].sort((a, b) => (b.projectedPoints ?? 0) - (a.projectedPoints ?? 0)),
-  );
-  const maxProjection = Math.max(...state.available.map((p) => p.projectedPoints || 0), 1);
+  const availableByPosition = sortByPosition(state.available);
   const turn = getPicksUntilNextTurn(state.lastOverallPick, myOverallPicks);
-  const weights = config.strategy.weights;
+  const positionPriorities = computePositionPriorities({
+    draftedPicks,
+    myTeamName,
+    config,
+    picksUntilNextTurn: turn.picksUntil,
+  });
+  const weights = config.strategy.playerWeights;
 
-  return state.available
-    .map((player) => {
-      const components = {
-        baseValue: baseValue(player, maxProjection),
-        vor: valueOverReplacement(
-          player,
-          availableByPosition[player.position] || [],
-          config.strategy.replacementRanks[player.position] || 8,
-        ),
-        scarcity: scarcityScore(player, availableByPosition, config),
-        rosterNeed: rosterNeedScore(player, state.myPicks, config),
-        tierDrop: tierDropScore(player, availableByPosition),
-        turnRisk: estimateTurnRisk(
-          player,
-          turn.picksUntil,
-          availableByPosition,
-          opponentNeeds,
-        ),
-      };
+  const scored = state.available.map((player) => {
+    const position = normalizePosition(player.position);
+    const positionPlayers = availableByPosition[position] || [];
+    const positionPriority = positionPriorities[position]?.priority || 0;
+    const components = {
+      positionPriority,
+      withinPositionValue: withinPositionValue(player, positionPlayers),
+      vor: valueOverReplacement(
+        player,
+        positionPlayers,
+        config.strategy.replacementRanks[position] || 8,
+      ),
+      tierDrop: tierDropScore(player, positionPlayers),
+      turnRisk: estimateTurnRisk(player, turn.picksUntil, positionPlayers, positionPriority),
+    };
 
-      const draftScore = Object.entries(weights).reduce(
-        (total, [key, weight]) => total + (components[key] || 0) * weight,
-        0,
-      );
+    const draftScore = Object.entries(weights).reduce(
+      (total, [key, weight]) => total + (components[key] || 0) * weight,
+      0,
+    );
 
-      return {
-        ...player,
-        draftScore: Number(draftScore.toFixed(2)),
-        components,
-        nextPick: turn.nextPick,
-        picksUntilNextTurn: turn.picksUntil,
-      };
-    })
-    .sort((a, b) => b.draftScore - a.draftScore);
+    return {
+      ...player,
+      position,
+      draftScore: Number(draftScore.toFixed(2)),
+      components,
+      positionPriority,
+      nextPick: turn.nextPick,
+      picksUntilNextTurn: turn.picksUntil,
+    };
+  }).sort((a, b) => b.draftScore - a.draftScore);
+
+  scored.positionPriorities = positionPriorities;
+  return scored;
 }
 
-export function recommendPairs(scoredPlayers, limit = 12) {
+export function recommendPairs(scoredPlayers, limit = 14) {
   const candidates = scoredPlayers.slice(0, limit);
   const pairs = [];
 
@@ -207,10 +289,14 @@ export function recommendPairs(scoredPlayers, limit = 12) {
       const first = candidates[i];
       const second = candidates[j];
       let synergy = 0;
+      const firstNeed = first.components.positionPriority || 0;
+      const secondNeed = second.components.positionPriority || 0;
 
-      if (first.position !== second.position) synergy += 4;
-      if (first.position === 'QB' || second.position === 'QB') synergy += 3;
-      if (['DST', 'K'].includes(first.position) || ['DST', 'K'].includes(second.position)) synergy -= 10;
+      if (first.position !== second.position) synergy += 5;
+      if (first.position === second.position && Math.min(firstNeed, secondNeed) < 70) synergy -= 8;
+      if (['DST', 'K'].includes(first.position) || ['DST', 'K'].includes(second.position)) synergy -= 15;
+      if (firstNeed >= 80) synergy += 3;
+      if (secondNeed >= 80) synergy += 3;
 
       pairs.push({
         first,
