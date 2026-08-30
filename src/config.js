@@ -97,7 +97,9 @@ export const LEAGUE_CONFIG = {
     aiReranker: {
       enabled: true,
       candidateLimit: 8,
-      timeoutMs: 2500,
+      // The rerank is asynchronous and race-protected, so allow a realistic
+      // network/model window instead of aborting a healthy request after 2.5s.
+      timeoutMs: 10000,
       endpoint: 'http://127.0.0.1:8787/rerank',
     },
     tightEndStrategy: {
