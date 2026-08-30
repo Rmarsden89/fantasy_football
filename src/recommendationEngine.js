@@ -107,10 +107,10 @@ function opponentDemand(position, draftedPicks, myTeamName, config) {
   return clamp((teamsStillNeeding / opponentCount) * 100);
 }
 
-function positionTurnPressure(position, picksUntilNextTurn, draftedPicks, myTeamName, config) {
-  if (!Number.isFinite(picksUntilNextTurn) || picksUntilNextTurn <= 0) return 0;
+function positionTurnPressure(position, picksUntilFollowingTurn, draftedPicks, myTeamName, config) {
+  if (!Number.isFinite(picksUntilFollowingTurn) || picksUntilFollowingTurn <= 0) return 0;
   const demand = opponentDemand(position, draftedPicks, myTeamName, config) / 100;
-  const exposure = Math.min(picksUntilNextTurn / Math.max(config.teams * 2 - 2, 1), 1);
+  const exposure = Math.min(picksUntilFollowingTurn / Math.max(config.teams * 2 - 2, 1), 1);
   return clamp(demand * exposure * 100);
 }
 
@@ -260,8 +260,10 @@ function tierDropScore(player, positionPlayers) {
   return clamp(((current - next) / range) * 600);
 }
 
-function estimateTurnRisk(player, picksUntilNextTurn, positionPlayers, positionPriority) {
-  if (!Number.isFinite(picksUntilNextTurn) || picksUntilNextTurn <= 0) return 100;
+function estimateWaitRisk(player, picksUntilFollowingTurn, positionPlayers, positionPriority) {
+  // If our next two picks are consecutive there is no intervening opponent who
+  // can take the player, so waiting one pick carries effectively no risk.
+  if (!Number.isFinite(picksUntilFollowingTurn) || picksUntilFollowingTurn <= 0) return 0;
   const group = [...positionPlayers].sort((a, b) => {
     const aRank = a.consensusRank ?? a.espnRank;
     const bRank = b.consensusRank ?? b.espnRank;
@@ -270,7 +272,7 @@ function estimateTurnRisk(player, picksUntilNextTurn, positionPlayers, positionP
   });
   const rankWithinPosition = Math.max(group.findIndex((p) => p.id === player.id) + 1, 1);
   const pressure = positionPriority / 100;
-  const expectedAtPosition = Math.max(1, picksUntilNextTurn * (0.1 + pressure * 0.35));
+  const expectedAtPosition = Math.max(1, picksUntilFollowingTurn * (0.1 + pressure * 0.35));
   if (rankWithinPosition <= expectedAtPosition) return 95;
   return clamp(95 - (rankWithinPosition - expectedAtPosition) * 11, 5, 95);
 }
@@ -339,6 +341,16 @@ export function getPicksUntilNextTurn(lastOverallPick, myOverallPicks) {
   return { nextPick: next, picksUntil: Math.max(next - lastOverallPick - 1, 0) };
 }
 
+function getFollowingPickContext(nextPick, myOverallPicks) {
+  if (!Number.isFinite(nextPick)) return { followingPick: null, picksUntilFollowing: null };
+  const followingPick = myOverallPicks.find((pick) => pick > nextPick) ?? null;
+  if (!Number.isFinite(followingPick)) return { followingPick: null, picksUntilFollowing: null };
+  return {
+    followingPick,
+    picksUntilFollowing: Math.max(followingPick - nextPick - 1, 0),
+  };
+}
+
 export function scoreAvailablePlayers({
   players,
   draftedPicks,
@@ -349,6 +361,7 @@ export function scoreAvailablePlayers({
   const state = buildDraftState({ players, draftedPicks, myTeamName });
   const turn = getPicksUntilNextTurn(state.lastOverallPick, myOverallPicks);
   const targetOverallPick = turn.nextPick ?? Math.max(state.lastOverallPick + 1, 1);
+  const following = getFollowingPickContext(turn.nextPick, myOverallPicks);
   const currentRound = Math.floor((targetOverallPick - 1) / config.teams) + 1;
   const counts = rosterCounts(state.myPicks);
   const eligibleAvailable = state.available.filter((player) =>
@@ -360,7 +373,9 @@ export function scoreAvailablePlayers({
     myTeamName,
     config,
     players,
-    picksUntilNextTurn: turn.picksUntil,
+    // Position urgency should describe whether a position can wait until the
+    // following selection, not how close we are to the current selection.
+    picksUntilNextTurn: following.picksUntilFollowing,
     currentRound,
   });
   const weights = phaseWeights(currentRound, config);
@@ -377,7 +392,12 @@ export function scoreAvailablePlayers({
       consensusValue: Number.isFinite(player.consensusValue) ? player.consensusValue : 50,
       upside: upsideScore(player, currentRound),
       tierDrop: tierDropScore(player, positionPlayers),
-      turnRisk: estimateTurnRisk(player, turn.picksUntil, positionPlayers, positionPriority),
+      waitRisk: estimateWaitRisk(
+        player,
+        following.picksUntilFollowing,
+        positionPlayers,
+        positionPriority,
+      ),
       byeTiebreak: byeTiebreakScore(player, state.myPicks, players, config),
     };
 
@@ -397,15 +417,25 @@ export function scoreAvailablePlayers({
       currentRound,
       nextPick: turn.nextPick,
       picksUntilNextTurn: turn.picksUntil,
+      followingPick: following.followingPick,
+      picksUntilFollowing: following.picksUntilFollowing,
     };
   });
 
-  const tieWindow = config.strategy.byeTiebreaker?.scoreWindow ?? 2;
+  const waitRiskWindow = config.strategy.decisionContext?.waitRiskScoreWindow ?? 3;
+  const byeWindow = config.strategy.byeTiebreaker?.scoreWindow ?? 2;
   scored.sort((a, b) => {
     const delta = b.draftScore - a.draftScore;
-    if (Math.abs(delta) > tieWindow) return delta;
-    const byeDelta = b.components.byeTiebreak - a.components.byeTiebreak;
-    if (byeDelta !== 0) return byeDelta;
+    if (Math.abs(delta) > waitRiskWindow) return delta;
+
+    const waitDelta = b.components.waitRisk - a.components.waitRisk;
+    if (waitDelta !== 0) return waitDelta;
+
+    if (Math.abs(delta) <= byeWindow) {
+      const byeDelta = b.components.byeTiebreak - a.components.byeTiebreak;
+      if (byeDelta !== 0) return byeDelta;
+    }
+
     const upsideDelta = b.components.upside - a.components.upside;
     if (upsideDelta !== 0) return upsideDelta;
     return delta;
@@ -414,30 +444,77 @@ export function scoreAvailablePlayers({
   scored.positionPriorities = positionPriorities;
   scored.currentRound = currentRound;
   scored.phaseWeights = weights;
+  scored.nextPick = turn.nextPick;
+  scored.followingPick = following.followingPick;
+  scored.picksUntilFollowing = following.picksUntilFollowing;
   return scored;
 }
 
-export function recommendPairs(scoredPlayers, limit = 14) {
-  const candidates = scoredPlayers.slice(0, limit);
+function simulatedPick(player, overallPick, myTeamName, config) {
+  const round = Math.floor((overallPick - 1) / config.teams) + 1;
+  const roundPick = ((overallPick - 1) % config.teams) + 1;
+  return {
+    overallPick,
+    round,
+    roundPick,
+    playerId: player.id,
+    playerName: player.name,
+    nflTeam: player.nflTeam,
+    position: player.position,
+    fantasyTeam: myTeamName,
+    simulated: true,
+  };
+}
+
+export function recommendPairs({
+  scoredPlayers,
+  players,
+  draftedPicks,
+  myTeamName,
+  config,
+  myOverallPicks = [],
+  limit = 14,
+  secondCandidateLimit = 8,
+}) {
+  const nextPick = scoredPlayers.nextPick ?? scoredPlayers[0]?.nextPick ?? null;
+  if (!Number.isFinite(nextPick)) return [];
+
+  const followingPick = myOverallPicks.find((pick) => pick > nextPick) ?? null;
+  // A turn pair only exists when our next two selections are consecutive.
+  if (followingPick !== nextPick + 1) return [];
+
+  const firstCandidates = scoredPlayers.slice(0, limit);
   const pairs = [];
-  for (let i = 0; i < candidates.length; i += 1) {
-    for (let j = i + 1; j < candidates.length; j += 1) {
-      const first = candidates[i];
-      const second = candidates[j];
-      if (first.position === 'TE' && second.position === 'TE') continue;
-      if (first.position === 'QB' && second.position === 'QB' && first.saturationMultiplier < 1) continue;
+
+  for (const first of firstCandidates) {
+    const simulatedDraft = [
+      ...draftedPicks,
+      simulatedPick(first, nextPick, myTeamName, config),
+    ];
+    const secondBoard = scoreAvailablePlayers({
+      players,
+      draftedPicks: simulatedDraft,
+      myTeamName,
+      config,
+      myOverallPicks,
+    });
+
+    for (const second of secondBoard.slice(0, secondCandidateLimit)) {
+      if (second.id === first.id) continue;
       let synergy = 0;
-      if (first.position !== second.position) synergy += 4;
-      if (first.components.upside >= 70) synergy += 2;
-      if (second.components.upside >= 70) synergy += 2;
+      if (first.position !== second.position) synergy += 2;
       if (['DST', 'K'].includes(first.position) || ['DST', 'K'].includes(second.position)) synergy -= 15;
+      const pairScore = first.draftScore + second.draftScore + synergy;
       pairs.push({
         first,
         second,
-        pairScore: Number((first.draftScore + second.draftScore + synergy).toFixed(2)),
+        pairScore: Number(pairScore.toFixed(2)),
+        secondScoreAfterFirst: second.draftScore,
+        simulatedAfterFirst: true,
       });
     }
   }
+
   return pairs.sort((a, b) => b.pairScore - a.pairScore);
 }
 
