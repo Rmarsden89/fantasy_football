@@ -4,7 +4,7 @@ import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
-const HELPER_VERSION = '0.3.2-anchored-player-value';
+const HELPER_VERSION = '0.3.3-need-vs-value';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
@@ -20,6 +20,7 @@ function printRecommendations(scored, pairs, count = 10) {
         priority: item.priority,
         have: item.have,
         required: item.required,
+        starterUrgency: item.missingStarterUrgencyMultiplier,
         saturation: item.saturationMultiplier,
         starterNeed: Number(item.components.starterNeed.toFixed(1)),
         flexNeed: Number(item.components.flexNeed.toFixed(1)),
@@ -39,6 +40,8 @@ function printRecommendations(scored, pairs, count = 10) {
       bye: player.byeWeek,
       score: player.draftScore,
       positionPriority: Number(player.positionPriority.toFixed(1)),
+      basePositionPriority: Number((player.basePositionPriority ?? player.positionPriority).toFixed(1)),
+      needQuality: Number((player.needQualityMultiplier ?? 1).toFixed(2)),
       consensusRank: player.consensusRank,
       sources: player.consensusSourceCount,
       projected: player.projectedPoints,
@@ -108,6 +111,8 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     .map((item) => ({
       position: item.position,
       priority: item.priority,
+      rawPriority: item.rawPriority,
+      missingStarterUrgencyMultiplier: item.missingStarterUrgencyMultiplier,
       have: item.have,
       required: item.required,
       saturationMultiplier: item.saturationMultiplier,
@@ -129,6 +134,8 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     marketGap: player.marketGap,
     draftScore: player.draftScore,
     positionPriority: player.positionPriority,
+    basePositionPriority: player.basePositionPriority,
+    needQualityMultiplier: player.needQualityMultiplier,
     saturationMultiplier: player.saturationMultiplier,
     ...player.components,
   }));
@@ -166,10 +173,10 @@ function historyToCsv(history) {
   const headers = [
     'timestamp', 'afterOverallPick', 'nextPick', 'picksUntilNextTurn', 'followingPick',
     'picksUntilFollowing', 'currentRound', 'recommendationRank', 'playerId', 'playerName',
-    'position', 'byeWeek', 'draftScore', 'positionPriority', 'saturationMultiplier',
-    'projectedPoints', 'espnRank', 'averageDraftPosition', 'consensusRank', 'consensusValue',
-    'consensusSourceCount', 'marketGap', 'upside', 'vor', 'withinPositionValue', 'tierDrop',
-    'waitRisk', 'byeTiebreak',
+    'position', 'byeWeek', 'draftScore', 'positionPriority', 'basePositionPriority',
+    'needQualityMultiplier', 'saturationMultiplier', 'projectedPoints', 'espnRank',
+    'averageDraftPosition', 'consensusRank', 'consensusValue', 'consensusSourceCount',
+    'marketGap', 'upside', 'vor', 'withinPositionValue', 'tierDrop', 'waitRisk', 'byeTiebreak',
   ];
   const rows = [headers.join(',')];
   for (const snapshot of history) {
@@ -178,10 +185,10 @@ function historyToCsv(history) {
         snapshot.timestamp, snapshot.afterOverallPick, snapshot.nextPick,
         snapshot.picksUntilNextTurn, snapshot.followingPick, snapshot.picksUntilFollowing,
         snapshot.currentRound, rec.rank, rec.playerId, rec.playerName, rec.position, rec.byeWeek,
-        rec.draftScore, rec.positionPriority, rec.saturationMultiplier, rec.projectedPoints,
-        rec.espnRank, rec.averageDraftPosition, rec.consensusRank, rec.consensusValue,
-        rec.consensusSourceCount, rec.marketGap, rec.upside, rec.vor, rec.withinPositionValue,
-        rec.tierDrop, rec.waitRisk, rec.byeTiebreak,
+        rec.draftScore, rec.positionPriority, rec.basePositionPriority, rec.needQualityMultiplier,
+        rec.saturationMultiplier, rec.projectedPoints, rec.espnRank, rec.averageDraftPosition,
+        rec.consensusRank, rec.consensusValue, rec.consensusSourceCount, rec.marketGap, rec.upside,
+        rec.vor, rec.withinPositionValue, rec.tierDrop, rec.waitRisk, rec.byeTiebreak,
       ].map(csvEscape).join(','));
     }
   }
@@ -212,6 +219,14 @@ function mergeConfig(overrides = {}) {
           ...(overrides.strategy?.consensus?.sourceWeights || {}),
         },
       },
+      tightEndStrategy: {
+        ...LEAGUE_CONFIG.strategy.tightEndStrategy,
+        ...(overrides.strategy?.tightEndStrategy || {}),
+        playerQualityGate: {
+          ...LEAGUE_CONFIG.strategy.tightEndStrategy.playerQualityGate,
+          ...(overrides.strategy?.tightEndStrategy?.playerQualityGate || {}),
+        },
+      },
       phaseWeights: {
         ...LEAGUE_CONFIG.strategy.phaseWeights,
         ...(overrides.strategy?.phaseWeights || {}),
@@ -238,6 +253,9 @@ export async function startDraftHelper(overrides = {}) {
   });
   const externalSources = Object.keys(externalRankings);
   console.log(`Loaded ${players.length} players. Consensus sources: ESPN rank, market ADP${externalSources.length ? `, ${externalSources.join(', ')}` : ''}.`);
+  if (!externalSources.length) {
+    console.info('External consensus source not loaded yet; ESPN rank + market ADP are the active baseline inputs.');
+  }
 
   const myOverallPicks = getMySnakePicks(18, config);
   const history = [];
