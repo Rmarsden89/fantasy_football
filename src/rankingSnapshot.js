@@ -1,4 +1,4 @@
-import snapshot from './data/rankings/2026-draft-final.json';
+import snapshot from './data/rankings/2026-draft-final.json' with { type: 'json' };
 
 function normalizeName(name) {
   return String(name || '')
