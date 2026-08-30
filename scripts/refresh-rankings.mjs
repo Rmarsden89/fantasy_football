@@ -3,7 +3,9 @@ import path from 'node:path';
 
 const OUT = path.resolve('src/data/rankings/2026-draft-final.json');
 const SOURCES = {
-  fantasyPros: 'https://www.fantasypros.com/nfl/rankings/ppr-superflex-cheatsheets.php',
+  // The printable rankings page is server-rendered. The interactive cheatsheet
+  // page can return shell HTML to Node and therefore parse as zero players.
+  fantasyPros: 'https://www.fantasypros.com/nfl/fantasy-football-rankings/ppr-superflex.php?print=true',
   pfn: 'https://www.profootballnetwork.com/fantasy-hq/overall-rankings-superflex-ppr',
 };
 
@@ -44,14 +46,31 @@ function parseFantasyPros(html) {
   for (const cells of tableRows(html)) {
     const rank = Number.parseInt(cells[0], 10);
     if (!Number.isFinite(rank) || rank <= 0) continue;
+
+    // FantasyPros has used both of these layouts:
+    //   RK | PLAYER | expert1 | expert2 ...
+    //   RK | PLAYER | POS | BYE ...
+    // The player cell usually contains the team and position text as well.
     const playerCell = cells[1] || '';
-    const match = playerCell.match(/^(.*?)\s*\(([A-Z]{2,3})\)\s*$/);
-    const name = (match?.[1] || playerCell).trim();
-    const team = match?.[2] || null;
-    const positionCell = cells[2] || '';
-    const position = positionCell.match(/^(QB|RB|WR|TE)/i)?.[1]?.toUpperCase() || null;
+    const positionFromPlayer = playerCell.match(/\b(QB|RB|WR|TE)\d*\b/i)?.[1]?.toUpperCase() || null;
+    const teamFromPlayer = playerCell.match(/\b([A-Z]{2,3})\s+(?:QB|RB|WR|TE)\d*\b/)?.[1] || null;
+
+    let position = positionFromPlayer;
+    for (const cell of cells.slice(2, 5)) {
+      position ||= cell.match(/^(QB|RB|WR|TE)\d*$/i)?.[1]?.toUpperCase() || null;
+    }
+
+    // Strip duplicated short-name/image text, trailing team and position tokens.
+    let name = playerCell
+      .replace(/\b[A-Z]{2,3}\s+(?:QB|RB|WR|TE)\d*\b.*$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // Some printable rows are simply "Josh Allen BUF QB".
+    const simple = playerCell.match(/^(.*?)\s+([A-Z]{2,3})\s+(QB|RB|WR|TE)\d*\b/i);
+    if (simple) name = simple[1].trim();
+
     if (!name || !position) continue;
-    players.push({ rank, name, team, position });
+    players.push({ rank, name, team: teamFromPlayer, position });
   }
   return players;
 }
@@ -73,8 +92,9 @@ function parsePfn(html) {
 async function fetchText(url) {
   const response = await fetch(url, {
     headers: {
-      'user-agent': 'Mozilla/5.0 fantasy-football-draft-helper/0.4',
-      accept: 'text/html,application/xhtml+xml',
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/148 Safari/537.36',
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'en-US,en;q=0.9',
     },
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
@@ -123,8 +143,16 @@ const [fantasyProsResult, pfnResult] = await Promise.all([
   trySource('PFN', SOURCES.pfn, parsePfn),
 ]);
 
+// Refreshing is maintenance, not a runtime dependency. If every web source is
+// temporarily blocked but a checked-in snapshot exists, keep it and exit 0.
 if (!fantasyProsResult.ok && !pfnResult.ok) {
-  throw new Error('No ranking source refreshed successfully; refusing to overwrite snapshot.');
+  const priorCount = Object.keys(prior.players || {}).length;
+  if (priorCount > 0) {
+    console.warn(`No source refreshed; keeping checked-in snapshot with ${priorCount} players.`);
+    console.warn('The draft helper can still build and run from the preserved snapshot.');
+    process.exit(0);
+  }
+  throw new Error('No ranking source refreshed successfully and no prior snapshot exists.');
 }
 
 // Start from prior data so a temporarily blocked source does not erase useful rankings.
