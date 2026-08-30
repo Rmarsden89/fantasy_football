@@ -46,7 +46,9 @@ function flexNeed(position, counts, config) {
   if (!FLEX_POSITIONS.has(position) || !config.roster.FLEX) return 0;
   if (position === 'TE' && (counts.TE || 0) >= config.roster.TE) return 0;
   const missingFlex = Math.max(config.roster.FLEX - flexFilled(counts, config), 0);
-  return missingFlex > 0 ? 100 : 0;
+  if (missingFlex <= 0) return 0;
+  if (position === 'TE') return config.strategy.tightEndStrategy?.unfilledFlexNeed ?? 25;
+  return 100;
 }
 
 function depthNeed(position, counts, config) {
@@ -73,7 +75,7 @@ function depthNeed(position, counts, config) {
     return 18;
   }
   if (position === 'TE') {
-    if (have < config.roster.TE) return 100;
+    if (have < config.roster.TE) return config.strategy.tightEndStrategy?.unfilledDepthNeed ?? 70;
     if (have === config.roster.TE) return 10;
     return 0;
   }
@@ -261,8 +263,6 @@ function tierDropScore(player, positionPlayers) {
 }
 
 function estimateWaitRisk(player, picksUntilFollowingTurn, positionPlayers, positionPriority) {
-  // If our next two picks are consecutive there is no intervening opponent who
-  // can take the player, so waiting one pick carries effectively no risk.
   if (!Number.isFinite(picksUntilFollowingTurn) || picksUntilFollowingTurn <= 0) return 0;
   const group = [...positionPlayers].sort((a, b) => {
     const aRank = a.consensusRank ?? a.espnRank;
@@ -368,13 +368,14 @@ export function scoreAvailablePlayers({
     isPositionEligible(normalizePosition(player.position), currentRound, config, counts),
   );
   const availableByPosition = sortByPosition(eligibleAvailable);
+  // Stable player-quality components are anchored to the full player pool.
+  // Live draft state still affects availability, depletion, roster need, and wait risk.
+  const baselineByPosition = sortByPosition(players);
   const positionPriorities = computePositionPriorities({
     draftedPicks,
     myTeamName,
     config,
     players,
-    // Position urgency should describe whether a position can wait until the
-    // following selection, not how close we are to the current selection.
     picksUntilNextTurn: following.picksUntilFollowing,
     currentRound,
   });
@@ -382,20 +383,21 @@ export function scoreAvailablePlayers({
 
   const scored = eligibleAvailable.map((player) => {
     const position = normalizePosition(player.position);
-    const positionPlayers = availableByPosition[position] || [];
+    const availablePositionPlayers = availableByPosition[position] || [];
+    const baselinePositionPlayers = baselineByPosition[position] || [];
     const positionPriority = positionPriorities[position]?.priority || 0;
     const saturation = positionPriorities[position]?.saturationMultiplier ?? 1;
     const components = {
       positionPriority,
-      withinPositionValue: withinPositionValue(player, positionPlayers),
-      vor: valueOverReplacement(player, positionPlayers, config.strategy.replacementRanks[position] || 8),
+      withinPositionValue: withinPositionValue(player, baselinePositionPlayers),
+      vor: valueOverReplacement(player, baselinePositionPlayers, config.strategy.replacementRanks[position] || 8),
       consensusValue: Number.isFinite(player.consensusValue) ? player.consensusValue : 50,
       upside: upsideScore(player, currentRound),
-      tierDrop: tierDropScore(player, positionPlayers),
+      tierDrop: tierDropScore(player, baselinePositionPlayers),
       waitRisk: estimateWaitRisk(
         player,
         following.picksUntilFollowing,
-        positionPlayers,
+        availablePositionPlayers,
         positionPriority,
       ),
       byeTiebreak: byeTiebreakScore(player, state.myPicks, players, config),
@@ -422,8 +424,9 @@ export function scoreAvailablePlayers({
     };
   });
 
-  const waitRiskWindow = config.strategy.decisionContext?.waitRiskScoreWindow ?? 3;
-  const byeWindow = config.strategy.byeTiebreaker?.scoreWindow ?? 2;
+  const waitRiskWindow = config.strategy.decisionContext?.waitRiskScoreWindow ?? 0.75;
+  const byeWindow = config.strategy.byeTiebreaker?.scoreWindow ?? 0.75;
+  const upsideTiebreakStartsRound = config.strategy.decisionContext?.upsideTiebreakStartsRound ?? 7;
   scored.sort((a, b) => {
     const delta = b.draftScore - a.draftScore;
     if (Math.abs(delta) > waitRiskWindow) return delta;
@@ -436,8 +439,11 @@ export function scoreAvailablePlayers({
       if (byeDelta !== 0) return byeDelta;
     }
 
-    const upsideDelta = b.components.upside - a.components.upside;
-    if (upsideDelta !== 0) return upsideDelta;
+    if (currentRound >= upsideTiebreakStartsRound) {
+      const upsideDelta = b.components.upside - a.components.upside;
+      if (upsideDelta !== 0) return upsideDelta;
+    }
+
     return delta;
   });
 
@@ -480,7 +486,6 @@ export function recommendPairs({
   if (!Number.isFinite(nextPick)) return [];
 
   const followingPick = myOverallPicks.find((pick) => pick > nextPick) ?? null;
-  // A turn pair only exists when our next two selections are consecutive.
   if (followingPick !== nextPick + 1) return [];
 
   const firstCandidates = scoredPlayers.slice(0, limit);
