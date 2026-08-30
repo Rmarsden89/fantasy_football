@@ -24,6 +24,13 @@ const draftedPicks = [
   { playerId: 12, playerName: 'My RB2', position: 'RB', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 24 },
 ];
 
+function onClockDraftedPicks() {
+  return [
+    ...draftedPicks,
+    { playerId: 99, playerName: 'Opponent Pick 55', position: 'WR', fantasyTeam: 'Opponent', overallPick: 55 },
+  ];
+}
+
 test('AI payload contains only the deterministic candidate window and roster state', () => {
   const board = scoredBoard();
   const payload = buildAiRerankPayload({
@@ -54,11 +61,30 @@ test('AI response can reorder candidates but cannot introduce outside players', 
   assert.equal(result.scoredPlayers.currentRound, 7);
 });
 
+test('AI reranker skips provider calls when it is not our pick', async () => {
+  const board = scoredBoard();
+  let providerCalled = false;
+  const result = await rerankWithAi({
+    scoredPlayers: board,
+    draftedPicks,
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    provider: async () => {
+      providerCalled = true;
+      return { rankings: [] };
+    },
+  });
+  assert.equal(result.status, 'skipped_not_on_clock');
+  assert.equal(providerCalled, false);
+  assert.equal(result.payload, null);
+  assert.deepEqual(result.scoredPlayers.map((player) => player.id), [1, 2, 3]);
+});
+
 test('AI reranker falls back to deterministic order when provider errors', async () => {
   const board = scoredBoard();
   const result = await rerankWithAi({
     scoredPlayers: board,
-    draftedPicks,
+    draftedPicks: onClockDraftedPicks(),
     myTeamName: LEAGUE_CONFIG.myTeamName,
     config: LEAGUE_CONFIG,
     provider: async () => { throw new Error('offline'); },
@@ -72,7 +98,7 @@ test('AI reranker applies a valid provider ranking', async () => {
   const board = scoredBoard();
   const result = await rerankWithAi({
     scoredPlayers: board,
-    draftedPicks,
+    draftedPicks: onClockDraftedPicks(),
     myTeamName: LEAGUE_CONFIG.myTeamName,
     config: LEAGUE_CONFIG,
     provider: async () => ({
