@@ -91,6 +91,15 @@ export const LEAGUE_CONFIG = {
         { minHave: 2, maxHave: 99, multiplier: 0 },
       ],
     },
+    // The AI layer is deliberately constrained: it may only reorder the
+    // deterministic top candidates and can never introduce an ineligible player.
+    // Supply window.__fantasyAiReranker(payload) or an endpoint override to activate it.
+    aiReranker: {
+      enabled: true,
+      candidateLimit: 8,
+      timeoutMs: 2500,
+      endpoint: null,
+    },
     tightEndStrategy: {
       elitePositionRank: 5,
       eliteStarterPriorityCap: 8,
