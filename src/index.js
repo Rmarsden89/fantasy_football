@@ -4,8 +4,9 @@ import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { buildExternalRankingsFromSnapshot, DEFAULT_RANKING_SNAPSHOT } from './rankingSnapshot.js';
 import { recommendPairs, scoreAvailablePlayers } from './strategyRecommendationEngine.js';
+import { rerankWithAi } from './aiReranker.js';
 
-const HELPER_VERSION = '0.4.1-depth-upside';
+const HELPER_VERSION = '0.5.0-ai-reranker';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
@@ -32,7 +33,7 @@ function printRecommendations(scored, pairs, count = 10) {
       })),
   );
 
-  console.log('Recommended players');
+  console.log('Deterministic recommendations');
   console.table(
     scored.slice(0, count).map((player, index) => ({
       rank: index + 1,
@@ -75,6 +76,36 @@ function printRecommendations(scored, pairs, count = 10) {
   } else {
     console.log('No immediate two-pick turn pair at this selection.');
   }
+  console.groupEnd();
+}
+
+function printAiRerank(aiResult, deterministicScored) {
+  if (aiResult.status !== 'applied') return;
+  const deterministicRank = new Map(
+    deterministicScored.map((player, index) => [String(player.id), index + 1]),
+  );
+  const decisionById = new Map(
+    (aiResult.decisions || []).map((decision) => [String(decision.playerId), decision]),
+  );
+
+  console.group(`AI reranker — Round ${aiResult.scoredPlayers.currentRound}`);
+  console.table(
+    aiResult.scoredPlayers.slice(0, aiResult.decisions.length || 8).map((player, index) => {
+      const decision = decisionById.get(String(player.id));
+      return {
+        aiRank: index + 1,
+        deterministicRank: deterministicRank.get(String(player.id)),
+        player: player.name,
+        position: player.position,
+        score: player.draftScore,
+        consensusRank: player.consensusRank,
+        upside: Number(player.components.upside.toFixed(1)),
+        reason: decision?.reason || '',
+        confidence: decision?.confidence ?? '',
+      };
+    }),
+  );
+  if (aiResult.summary) console.log(aiResult.summary);
   console.groupEnd();
 }
 
@@ -173,6 +204,35 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     positionPriorities,
     recommendations,
     pairRecommendations,
+    aiRerank: null,
+  };
+}
+
+function serializeAiRerank(aiResult, deterministicScored) {
+  if (!aiResult) return null;
+  const deterministicRank = new Map(
+    deterministicScored.map((player, index) => [String(player.id), index + 1]),
+  );
+  return {
+    status: aiResult.status,
+    error: aiResult.error || null,
+    summary: aiResult.summary || null,
+    candidateLimit: aiResult.payload?.candidates?.length ?? 0,
+    rankings: aiResult.status === 'applied'
+      ? aiResult.scoredPlayers.slice(0, aiResult.decisions.length).map((player, index) => {
+          const decision = aiResult.decisions.find((item) => String(item.playerId) === String(player.id));
+          return {
+            aiRank: index + 1,
+            deterministicRank: deterministicRank.get(String(player.id)) ?? null,
+            playerId: player.id,
+            playerName: player.name,
+            position: player.position,
+            draftScore: player.draftScore,
+            reason: decision?.reason || null,
+            confidence: decision?.confidence ?? null,
+          };
+        })
+      : [],
   };
 }
 
@@ -185,10 +245,13 @@ function historyToCsv(history) {
     'averageDraftPosition', 'consensusRank', 'consensusValue', 'consensusSourceCount',
     'fantasyProsRank', 'espnDraftRank', 'marketGap', 'upside', 'upsideBase', 'upsideMultiplier',
     'vor', 'withinPositionValue', 'tierDrop', 'waitRisk', 'byeTiebreak',
+    'aiRank', 'aiReason', 'aiConfidence',
   ];
   const rows = [headers.join(',')];
   for (const snapshot of history) {
+    const aiById = new Map((snapshot.aiRerank?.rankings || []).map((item) => [String(item.playerId), item]));
     for (const rec of snapshot.recommendations) {
+      const ai = aiById.get(String(rec.playerId));
       rows.push([
         snapshot.timestamp, snapshot.afterOverallPick, snapshot.nextPick,
         snapshot.picksUntilNextTurn, snapshot.followingPick, snapshot.picksUntilFollowing,
@@ -199,6 +262,7 @@ function historyToCsv(history) {
         rec.consensusSourceRanks?.fantasyPros, rec.consensusSourceRanks?.espnDraftRank,
         rec.marketGap, rec.upside, rec.upsideBase, rec.upsideMultiplier, rec.vor,
         rec.withinPositionValue, rec.tierDrop, rec.waitRisk, rec.byeTiebreak,
+        ai?.aiRank, ai?.reason, ai?.confidence,
       ].map(csvEscape).join(','));
     }
   }
@@ -224,6 +288,10 @@ function mergeConfig(overrides = {}) {
       depthUpside: {
         ...LEAGUE_CONFIG.strategy.depthUpside,
         ...(overrides.strategy?.depthUpside || {}),
+      },
+      aiReranker: {
+        ...LEAGUE_CONFIG.strategy.aiReranker,
+        ...(overrides.strategy?.aiReranker || {}),
       },
       consensus: {
         ...LEAGUE_CONFIG.strategy.consensus,
@@ -280,7 +348,6 @@ export async function startDraftHelper(overrides = {}) {
     rankCeiling: config.strategy.consensus.rankCeiling,
     externalRankings,
   });
-  const externalSources = Object.keys(externalRankings);
   console.log(
     `Loaded ${players.length} players. Static ranking snapshot ${snapshotBundle.rankingSnapshot.generatedAt || 'unknown date'}; ` +
     `FantasyPros matches: ${snapshotBundle.sourceSummary.fantasyPros}; ESPN-board matches: ${snapshotBundle.sourceSummary.espnDraftRank}.`,
@@ -290,10 +357,55 @@ export async function startDraftHelper(overrides = {}) {
   const myOverallPicks = getMySnakePicks(18, config);
   const history = [];
   let watcher;
+  let rerankRequestId = 0;
+  let rerankerAvailabilityLogged = false;
+
+  const getAiProvider = () => overrides.aiReranker || window.__fantasyAiReranker || null;
+
+  const runAiRerank = async ({ requestId, draftedPicks, deterministicScored, pairs, afterOverallPick }) => {
+    const aiResult = await rerankWithAi({
+      scoredPlayers: deterministicScored,
+      draftedPicks,
+      myTeamName: config.myTeamName,
+      config,
+      provider: getAiProvider(),
+    });
+
+    if (requestId !== rerankRequestId) return;
+    if (window.__fantasyDraftHelper.state?.afterOverallPick !== afterOverallPick) return;
+
+    if (aiResult.status === 'unavailable') {
+      if (!rerankerAvailabilityLogged) {
+        console.info(
+          'AI reranker is wired but no provider is configured. Set window.__fantasyAiReranker(payload) before starting, ' +
+          'pass { aiReranker } to startFantasyDraftHelper(), or configure strategy.aiReranker.endpoint.',
+        );
+        rerankerAvailabilityLogged = true;
+      }
+      return;
+    }
+
+    const currentSnapshot = history.find((item) => item.afterOverallPick === afterOverallPick);
+    if (currentSnapshot) currentSnapshot.aiRerank = serializeAiRerank(aiResult, deterministicScored);
+
+    const activeScored = aiResult.status === 'applied' ? aiResult.scoredPlayers : deterministicScored;
+    window.__fantasyDraftHelper.state = {
+      ...window.__fantasyDraftHelper.state,
+      scored: activeScored,
+      deterministicScored,
+      aiRerank: serializeAiRerank(aiResult, deterministicScored),
+      pairs,
+      history,
+    };
+
+    if (aiResult.status === 'applied') printAiRerank(aiResult, deterministicScored);
+    else if (aiResult.status === 'error') console.warn('AI reranker failed; deterministic ranking preserved:', aiResult.error);
+  };
 
   const recalculate = () => {
+    const requestId = ++rerankRequestId;
     const draftedPicks = watcher.getPicks();
-    const scored = scoreAvailablePlayers({
+    const deterministicScored = scoreAvailablePlayers({
       players,
       draftedPicks,
       myTeamName: config.myTeamName,
@@ -301,28 +413,45 @@ export async function startDraftHelper(overrides = {}) {
       myOverallPicks,
     });
     const pairs = recommendPairs({
-      scoredPlayers: scored,
+      scoredPlayers: deterministicScored,
       players,
       draftedPicks,
       myTeamName: config.myTeamName,
       config,
       myOverallPicks,
     });
-    const snapshot = buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName: config.myTeamName });
+    const snapshot = buildHistorySnapshot({
+      draftedPicks,
+      scored: deterministicScored,
+      pairs,
+      myTeamName: config.myTeamName,
+    });
     const prior = history.at(-1);
     if (!prior || prior.afterOverallPick !== snapshot.afterOverallPick) history.push(snapshot);
     else history[history.length - 1] = snapshot;
 
     window.__fantasyDraftHelper.state = {
       version: HELPER_VERSION,
+      afterOverallPick: snapshot.afterOverallPick,
       draftedPicks,
-      scored,
+      scored: deterministicScored,
+      deterministicScored,
+      aiRerank: null,
       pairs,
-      positionPriorities: scored.positionPriorities,
+      positionPriorities: deterministicScored.positionPriorities,
       myOverallPicks,
       history,
     };
-    printRecommendations(scored, pairs);
+    printRecommendations(deterministicScored, pairs);
+
+    void runAiRerank({
+      requestId,
+      draftedPicks,
+      deterministicScored,
+      pairs,
+      afterOverallPick: snapshot.afterOverallPick,
+    });
+
     return window.__fantasyDraftHelper.state;
   };
 
@@ -349,6 +478,12 @@ export async function startDraftHelper(overrides = {}) {
           sourceSummary: snapshotBundle.sourceSummary,
         },
         consensusSources: ['fantasyPros', 'espnDraftRank', 'marketAdp', 'espnRank'],
+        aiReranker: {
+          enabled: config.strategy.aiReranker?.enabled !== false,
+          candidateLimit: config.strategy.aiReranker?.candidateLimit ?? 8,
+          endpointConfigured: Boolean(config.strategy.aiReranker?.endpoint),
+          providerConfigured: Boolean(getAiProvider()),
+        },
         config,
         history,
         finalState: window.__fantasyDraftHelper.state,
@@ -362,6 +497,7 @@ export async function startDraftHelper(overrides = {}) {
     },
     stop() {
       watcher.stop();
+      rerankRequestId += 1;
       console.log(`Fantasy Draft Helper ${HELPER_VERSION} stopped.`);
     },
   };
