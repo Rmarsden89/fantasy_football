@@ -19,11 +19,12 @@ const players = [
   { id: 6, name: 'TE Elite', position: 'TE', projectedPoints: 230, espnRank: 10, consensusValue: 92 },
   { id: 9, name: 'TE Two', position: 'TE', projectedPoints: 200, espnRank: 30, consensusValue: 75 },
   { id: 10, name: 'TE Three', position: 'TE', projectedPoints: 170, espnRank: 60, consensusValue: 55 },
+  { id: 12, name: 'TE Replacement', position: 'TE', projectedPoints: 125, espnRank: 140, consensusValue: 28 },
   { id: 7, name: 'DST One', position: 'DST', projectedPoints: 240, espnRank: 200, consensusValue: 20 },
   { id: 8, name: 'K One', position: 'K', projectedPoints: 145, espnRank: 220, consensusValue: 10 },
 ];
 
-const snakePicks = [8, 9, 24, 25, 40, 41];
+const snakePicks = [8, 9, 24, 25, 40, 41, 56, 57, 72, 73, 88, 89, 104, 105, 120, 121, 136, 137, 152, 153];
 
 test('drafted players are removed from the available pool', () => {
   const state = buildDraftState({
@@ -78,6 +79,63 @@ test('filled QB starters reduce QB priority relative to empty RB starters', () =
   assert.equal(priorities.RB.components.starterNeed, 100);
 });
 
+test('missing TE urgency rises by round instead of dominating from round one', () => {
+  const early = computePositionPriorities({
+    draftedPicks: [],
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    players,
+    picksUntilNextTurn: 0,
+    currentRound: 2,
+  });
+  const middle = computePositionPriorities({
+    draftedPicks: [],
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    players,
+    picksUntilNextTurn: 0,
+    currentRound: 8,
+  });
+  const late = computePositionPriorities({
+    draftedPicks: [],
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    players,
+    picksUntilNextTurn: 0,
+    currentRound: 12,
+  });
+  assert.equal(early.TE.missingStarterUrgencyMultiplier, 0.70);
+  assert.equal(middle.TE.missingStarterUrgencyMultiplier, 0.96);
+  assert.equal(late.TE.missingStarterUrgencyMultiplier, 1.08);
+  assert.ok(early.TE.priority < middle.TE.priority);
+  assert.ok(middle.TE.priority < late.TE.priority);
+  assert.ok(early.TE.priority < early.RB.priority);
+});
+
+test('low-quality TE does not receive full positional-need credit', () => {
+  const beforePick88 = Array.from({ length: 87 }, (_, index) => ({
+    playerId: 1000 + index,
+    playerName: `Other ${index + 1}`,
+    position: 'WR',
+    fantasyTeam: `Other ${index % 7}`,
+    overallPick: index + 1,
+  }));
+  const scored = scoreAvailablePlayers({
+    players,
+    draftedPicks: beforePick88,
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    myOverallPicks: snakePicks,
+  });
+  const elite = scored.find((player) => player.id === 6);
+  const replacement = scored.find((player) => player.id === 12);
+  assert.ok(elite);
+  assert.ok(replacement);
+  assert.equal(elite.needQualityMultiplier, 1);
+  assert.ok(replacement.needQualityMultiplier < 1);
+  assert.ok(replacement.positionPriority < replacement.basePositionPriority);
+});
+
 test('an elite starting TE makes TE2 a very low priority', () => {
   const draftedPicks = [
     { playerId: 6, playerName: 'TE Elite', position: 'TE', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 8 },
@@ -112,14 +170,22 @@ test('a third TE is never a recommendation candidate', () => {
   assert.equal(scored.positionPriorities.TE.eligible, false);
 });
 
-test('DST and kicker are not recommendation candidates before their late-round gates', () => {
+test('DST and kicker are not recommendation candidates before their later gates', () => {
+  const beforeRound16 = Array.from({ length: 119 }, (_, index) => ({
+    playerId: 2000 + index,
+    playerName: `Other ${index + 1}`,
+    position: 'WR',
+    fantasyTeam: `Other ${index % 7}`,
+    overallPick: index + 1,
+  }));
   const scored = scoreAvailablePlayers({
     players,
-    draftedPicks: [],
+    draftedPicks: beforeRound16,
     myTeamName: LEAGUE_CONFIG.myTeamName,
     config: LEAGUE_CONFIG,
     myOverallPicks: snakePicks,
   });
+  assert.equal(scored.currentRound, 15);
   assert.equal(scored.some((player) => player.position === 'DST'), false);
   assert.equal(scored.some((player) => player.position === 'K'), false);
 });
