@@ -71,6 +71,10 @@ export const LEAGUE_CONFIG = {
       eliteStarterPriorityCap: 8,
       normalStarterPriorityCap: 20,
       backupEarliestRound: 10,
+      // An empty TE slot matters, but it should not carry the same FLEX/depth
+      // urgency as RB/WR. Elite individual TEs can still rise on player value.
+      unfilledFlexNeed: 25,
+      unfilledDepthNeed: 70,
     },
     specialTeamsEarliestRound: {
       DST: 14,
@@ -92,8 +96,8 @@ export const LEAGUE_CONFIG = {
       },
       rankCeiling: 240,
     },
-    // Core player value is intentionally stable. Wait risk is no longer part
-    // of these weights; it is used only when two players are close in value.
+    // Core player value is intentionally stable. Live availability affects
+    // wait risk and depletion, but not a player's baseline VOR/tier quality.
     phaseWeights: {
       early: {
         throughRound: 6,
@@ -123,11 +127,12 @@ export const LEAGUE_CONFIG = {
       },
     },
     decisionContext: {
-      // Only allow wait risk to reorder players whose stable scores are close.
-      waitRiskScoreWindow: 3.0,
+      // Reorder only true near-ties; a 2-3 point core value edge should win.
+      waitRiskScoreWindow: 0.75,
+      upsideTiebreakStartsRound: 7,
     },
     byeTiebreaker: {
-      scoreWindow: 2.0,
+      scoreWindow: 0.75,
       conflictPenalty: 25,
       maxConflictsCounted: 3,
     },
