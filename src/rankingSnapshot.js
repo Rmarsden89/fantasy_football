@@ -16,15 +16,18 @@ function addRank(byName, player, field) {
 
 export function buildExternalRankingsFromSnapshot(rankingSnapshot = snapshot) {
   const fantasyPros = { byName: {} };
+  const pfn = { byName: {} };
   const espnDraftRank = { byName: {} };
 
   for (const player of Object.values(rankingSnapshot?.players || {})) {
     addRank(fantasyPros.byName, player, 'fantasyProsRank');
+    addRank(pfn.byName, player, 'pfnRank');
     addRank(espnDraftRank.byName, player, 'espnDraftRank');
   }
 
   const externalRankings = {};
   if (Object.keys(fantasyPros.byName).length) externalRankings.fantasyPros = fantasyPros;
+  if (Object.keys(pfn.byName).length) externalRankings.pfn = pfn;
   if (Object.keys(espnDraftRank.byName).length) externalRankings.espnDraftRank = espnDraftRank;
 
   return {
@@ -32,6 +35,7 @@ export function buildExternalRankingsFromSnapshot(rankingSnapshot = snapshot) {
     externalRankings,
     sourceSummary: {
       fantasyPros: Object.keys(fantasyPros.byName).length,
+      pfn: Object.keys(pfn.byName).length,
       espnDraftRank: Object.keys(espnDraftRank.byName).length,
     },
   };
