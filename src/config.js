@@ -73,17 +73,12 @@ export const LEAGUE_CONFIG = {
       backupEarliestRound: 10,
       unfilledFlexNeed: 25,
       unfilledDepthNeed: 70,
-      // A missing TE should become more urgent over time, but it should not
-      // dominate the draft from Round 1 simply because the starter slot is empty.
       missingStarterUrgency: [
         { throughRound: 3, multiplier: 0.70 },
         { throughRound: 7, multiplier: 0.82 },
         { throughRound: 10, multiplier: 0.96 },
         { throughRound: 18, multiplier: 1.08 },
       ],
-      // Positional need only gets its full weight for TEs who are themselves
-      // credible values. This keeps TE desperation from elevating a weak TE
-      // over clearly better RB/WR/QB options.
       playerQualityGate: {
         minimum: 52,
         fullCredit: 78,
@@ -102,46 +97,49 @@ export const LEAGUE_CONFIG = {
       opponentDemand: 0.10,
       turnPressure: 0.10,
     },
+    // The consensus layer is now the primary player-quality anchor. The live
+    // ESPN API rank remains a fallback signal, while the checked-in snapshot
+    // can contribute FantasyPros ECR and the visible ESPN draft-board rank.
     consensus: {
       sourceWeights: {
-        espnRank: 0.35,
-        marketAdp: 0.25,
         fantasyPros: 0.40,
+        espnDraftRank: 0.25,
+        marketAdp: 0.20,
+        espnRank: 0.15,
       },
       rankCeiling: 240,
     },
-    // Core player value is intentionally stable. Wait risk is no longer part
-    // of these weights; it is used only when two players are close in value.
+    // VOR is deliberately a league-specific adjustment rather than the main
+    // player-quality engine. Consensus carries more of the stable baseline.
     phaseWeights: {
       early: {
         throughRound: 6,
-        positionPriority: 0.56,
-        vor: 0.18,
-        withinPositionValue: 0.10,
-        consensusValue: 0.12,
+        positionPriority: 0.54,
+        vor: 0.10,
+        withinPositionValue: 0.08,
+        consensusValue: 0.24,
         upside: 0.00,
         tierDrop: 0.04,
       },
       middle: {
         throughRound: 11,
-        positionPriority: 0.50,
-        vor: 0.15,
-        withinPositionValue: 0.09,
-        consensusValue: 0.12,
-        upside: 0.10,
+        positionPriority: 0.47,
+        vor: 0.08,
+        withinPositionValue: 0.07,
+        consensusValue: 0.20,
+        upside: 0.14,
         tierDrop: 0.04,
       },
       late: {
-        positionPriority: 0.42,
-        vor: 0.11,
-        withinPositionValue: 0.07,
-        consensusValue: 0.12,
-        upside: 0.25,
+        positionPriority: 0.38,
+        vor: 0.06,
+        withinPositionValue: 0.06,
+        consensusValue: 0.18,
+        upside: 0.29,
         tierDrop: 0.03,
       },
     },
     decisionContext: {
-      // Only allow wait risk to reorder players whose stable scores are close.
       waitRiskScoreWindow: 0.75,
       upsideTiebreakStartsRound: 7,
     },
