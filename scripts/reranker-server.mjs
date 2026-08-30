@@ -20,7 +20,9 @@ const responseSchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          playerId: { type: ['number', 'string'] },
+          // String keeps the strict schema simple. The browser normalizes IDs
+          // with String(...) before matching them back to deterministic candidates.
+          playerId: { type: 'string' },
           reason: { type: 'string' },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
         },
@@ -35,7 +37,7 @@ const responseSchema = {
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'content-type');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 }
 
 function sendJson(res, status, body) {
@@ -52,16 +54,25 @@ async function readJson(req) {
 }
 
 function buildInstructions(payload) {
+  const normalized = {
+    ...payload,
+    candidates: (payload.candidates || []).map((candidate) => ({
+      ...candidate,
+      playerId: String(candidate.playerId),
+    })),
+  };
+
   return [
     'You are a fantasy-football draft reranker.',
     'You may ONLY reorder the supplied candidates. Never add a player outside candidates.',
     'Treat the deterministic engine as authoritative for eligibility and roster caps.',
     'Return every supplied candidate exactly once, in preferred order.',
+    'Return playerId exactly as the string supplied for that candidate.',
     'Use the supplied league scoring, roster state, draft context, deterministic metrics, and policy rules.',
     'For close decisions, prioritize roster construction over tiny deterministic score differences.',
     'Keep each reason concise and specific to the roster role being filled.',
     '',
-    `Payload:\n${JSON.stringify(payload)}`,
+    `Payload:\n${JSON.stringify(normalized)}`,
   ].join('\n');
 }
 
@@ -76,6 +87,7 @@ function extractOutputText(data) {
 }
 
 async function callOpenAI(payload) {
+  const startedAt = Date.now();
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
@@ -86,6 +98,7 @@ async function callOpenAI(payload) {
       model: MODEL,
       reasoning: { effort: REASONING_EFFORT },
       input: buildInstructions(payload),
+      max_output_tokens: 1200,
       text: {
         format: {
           type: 'json_schema',
@@ -97,15 +110,32 @@ async function callOpenAI(payload) {
     }),
   });
 
-  const data = await response.json();
+  const raw = await response.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = null;
+  }
+
   if (!response.ok) {
-    const message = data?.error?.message || `OpenAI returned HTTP ${response.status}`;
+    const message = data?.error?.message || raw || `OpenAI returned HTTP ${response.status}`;
+    console.error(`OpenAI ${response.status} after ${Date.now() - startedAt}ms: ${message}`);
     throw new Error(message);
   }
 
   const text = extractOutputText(data);
-  if (!text) throw new Error('OpenAI response did not contain output text.');
-  return JSON.parse(text);
+  if (!text) {
+    console.error('OpenAI response missing output text:', JSON.stringify(data, null, 2));
+    throw new Error('OpenAI response did not contain output text.');
+  }
+
+  const parsed = JSON.parse(text);
+  console.log(
+    `Reranked ${payload.candidates.length} candidates with ${MODEL} in ${Date.now() - startedAt}ms` +
+    (data?.usage ? ` (${data.usage.input_tokens ?? '?'} in / ${data.usage.output_tokens ?? '?'} out)` : ''),
+  );
+  return parsed;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -135,8 +165,9 @@ const server = http.createServer(async (req, res) => {
     const result = await callOpenAI(payload);
     sendJson(res, 200, result);
   } catch (error) {
-    console.error('Rerank failed:', error);
-    sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Rerank failed:', message);
+    sendJson(res, 500, { error: message });
   }
 });
 
