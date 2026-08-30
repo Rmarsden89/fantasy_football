@@ -93,12 +93,12 @@ export const LEAGUE_CONFIG = {
     },
     // The AI layer is deliberately constrained: it may only reorder the
     // deterministic top candidates and can never introduce an ineligible player.
-    // Supply window.__fantasyAiReranker(payload) or an endpoint override to activate it.
+    // The local reranker service keeps the OpenAI API key out of the browser bundle.
     aiReranker: {
       enabled: true,
       candidateLimit: 8,
       timeoutMs: 2500,
-      endpoint: null,
+      endpoint: 'http://127.0.0.1:8787/rerank',
     },
     tightEndStrategy: {
       elitePositionRank: 5,
