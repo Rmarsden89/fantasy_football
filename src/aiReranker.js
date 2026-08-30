@@ -23,6 +23,27 @@ function rosterCounts(draftedPicks, myTeamName) {
   return counts;
 }
 
+function latestOverallPick(draftedPicks) {
+  let latest = 0;
+  for (const pick of draftedPicks || []) {
+    const overallPick = Number(pick?.overallPick);
+    if (Number.isFinite(overallPick) && overallPick > latest) latest = overallPick;
+  }
+  return latest;
+}
+
+export function shouldRunAiRerank({ scoredPlayers, draftedPicks, config }) {
+  // The live AI layer is intentionally a snake-draft, on-the-clock feature.
+  // scoredPlayers.nextPick is our next scheduled selection; if it is exactly
+  // one after the latest completed overall pick, then we are currently up.
+  if (String(config?.draftType || '').toUpperCase() !== 'SNAKE') return false;
+
+  const nextPick = Number(scoredPlayers?.nextPick ?? scoredPlayers?.[0]?.nextPick);
+  if (!Number.isFinite(nextPick)) return false;
+
+  return nextPick === latestOverallPick(draftedPicks) + 1;
+}
+
 function candidatePayload(player, deterministicRank) {
   return {
     playerId: player.id,
@@ -185,6 +206,16 @@ export async function rerankWithAi({
   const candidateLimit = settings.candidateLimit ?? 8;
   if (settings.enabled === false) {
     return { status: 'disabled', scoredPlayers, payload: null, decisions: [], summary: null };
+  }
+
+  if (!shouldRunAiRerank({ scoredPlayers, draftedPicks, config })) {
+    return {
+      status: 'skipped_not_on_clock',
+      scoredPlayers,
+      payload: null,
+      decisions: [],
+      summary: null,
+    };
   }
 
   const payload = buildAiRerankPayload({
