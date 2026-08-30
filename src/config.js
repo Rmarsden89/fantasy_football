@@ -92,36 +92,39 @@ export const LEAGUE_CONFIG = {
       },
       rankCeiling: 240,
     },
+    // Core player value is intentionally stable. Wait risk is no longer part
+    // of these weights; it is used only when two players are close in value.
     phaseWeights: {
       early: {
         throughRound: 6,
-        positionPriority: 0.54,
-        vor: 0.17,
+        positionPriority: 0.56,
+        vor: 0.18,
         withinPositionValue: 0.10,
         consensusValue: 0.12,
         upside: 0.00,
         tierDrop: 0.04,
-        turnRisk: 0.03,
       },
       middle: {
         throughRound: 11,
-        positionPriority: 0.48,
-        vor: 0.14,
+        positionPriority: 0.50,
+        vor: 0.15,
         withinPositionValue: 0.09,
         consensusValue: 0.12,
-        upside: 0.08,
+        upside: 0.10,
         tierDrop: 0.04,
-        turnRisk: 0.05,
       },
       late: {
-        positionPriority: 0.40,
-        vor: 0.10,
+        positionPriority: 0.42,
+        vor: 0.11,
         withinPositionValue: 0.07,
         consensusValue: 0.12,
-        upside: 0.22,
+        upside: 0.25,
         tierDrop: 0.03,
-        turnRisk: 0.06,
       },
+    },
+    decisionContext: {
+      // Only allow wait risk to reorder players whose stable scores are close.
+      waitRiskScoreWindow: 3.0,
     },
     byeTiebreaker: {
       scoreWindow: 2.0,
