@@ -97,20 +97,20 @@ export const LEAGUE_CONFIG = {
       opponentDemand: 0.10,
       turnPressure: 0.10,
     },
-    // The consensus layer is now the primary player-quality anchor. The live
-    // ESPN API rank remains a fallback signal, while the checked-in snapshot
-    // can contribute FantasyPros ECR and the visible ESPN draft-board rank.
+    // Independent ranking sources form the stable player-quality anchor.
+    // Missing sources are automatically renormalized by consensusModel, so
+    // partial snapshot coverage does not penalize a player.
     consensus: {
       sourceWeights: {
-        fantasyPros: 0.40,
-        espnDraftRank: 0.25,
-        marketAdp: 0.20,
-        espnRank: 0.15,
+        fantasyPros: 0.35,
+        pfn: 0.25,
+        espnDraftRank: 0.15,
+        marketAdp: 0.15,
+        espnRank: 0.10,
       },
       rankCeiling: 240,
     },
-    // VOR is deliberately a league-specific adjustment rather than the main
-    // player-quality engine. Consensus carries more of the stable baseline.
+    // VOR is a league-specific adjustment, not the primary player ranking.
     phaseWeights: {
       early: {
         throughRound: 6,
