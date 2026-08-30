@@ -4,7 +4,7 @@ import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
-const HELPER_VERSION = '0.3.0-consensus-upside';
+const HELPER_VERSION = '0.3.1-stable-sequential-pairs';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
@@ -45,20 +45,27 @@ function printRecommendations(scored, pairs, count = 10) {
       adp: player.averageDraftPosition,
       upside: Number(player.components.upside.toFixed(1)),
       vor: Number(player.components.vor.toFixed(1)),
+      waitRisk: Number(player.components.waitRisk.toFixed(1)),
       byeTie: Number(player.components.byeTiebreak.toFixed(1)),
       saturation: player.saturationMultiplier,
     })),
   );
 
-  console.log('Best turn pairs');
-  console.table(
-    pairs.slice(0, 5).map((pair, index) => ({
-      rank: index + 1,
-      pair: `${pair.first.name} + ${pair.second.name}`,
-      positions: `${pair.first.position}/${pair.second.position}`,
-      score: pair.pairScore,
-    })),
-  );
+  if (pairs.length) {
+    console.log('Best sequential turn pairs');
+    console.table(
+      pairs.slice(0, 5).map((pair, index) => ({
+        rank: index + 1,
+        pair: `${pair.first.name} + ${pair.second.name}`,
+        positions: `${pair.first.position}/${pair.second.position}`,
+        firstScore: pair.first.draftScore,
+        secondScoreAfterFirst: pair.secondScoreAfterFirst,
+        pairScore: pair.pairScore,
+      })),
+    );
+  } else {
+    console.log('No immediate two-pick turn pair at this selection.');
+  }
   console.groupEnd();
 }
 
@@ -130,9 +137,12 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     rank: index + 1,
     firstPlayer: pair.first.name,
     firstPosition: pair.first.position,
+    firstScore: pair.first.draftScore,
     secondPlayer: pair.second.name,
     secondPosition: pair.second.position,
+    secondScoreAfterFirst: pair.secondScoreAfterFirst,
     pairScore: pair.pairScore,
+    sequentialSimulation: pair.simulatedAfterFirst === true,
   }));
 
   return {
@@ -141,6 +151,8 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     lastPick,
     nextPick,
     picksUntilNextTurn,
+    followingPick: scored.followingPick ?? null,
+    picksUntilFollowing: scored.picksUntilFollowing ?? null,
     currentRound: scored.currentRound,
     scoringPhaseWeights: scored.phaseWeights,
     myRoster,
@@ -152,22 +164,24 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
 
 function historyToCsv(history) {
   const headers = [
-    'timestamp', 'afterOverallPick', 'nextPick', 'picksUntilNextTurn', 'currentRound',
-    'recommendationRank', 'playerId', 'playerName', 'position', 'byeWeek', 'draftScore',
-    'positionPriority', 'saturationMultiplier', 'projectedPoints', 'espnRank',
-    'averageDraftPosition', 'consensusRank', 'consensusValue', 'consensusSourceCount',
-    'marketGap', 'upside', 'vor', 'withinPositionValue', 'tierDrop', 'turnRisk', 'byeTiebreak',
+    'timestamp', 'afterOverallPick', 'nextPick', 'picksUntilNextTurn', 'followingPick',
+    'picksUntilFollowing', 'currentRound', 'recommendationRank', 'playerId', 'playerName',
+    'position', 'byeWeek', 'draftScore', 'positionPriority', 'saturationMultiplier',
+    'projectedPoints', 'espnRank', 'averageDraftPosition', 'consensusRank', 'consensusValue',
+    'consensusSourceCount', 'marketGap', 'upside', 'vor', 'withinPositionValue', 'tierDrop',
+    'waitRisk', 'byeTiebreak',
   ];
   const rows = [headers.join(',')];
   for (const snapshot of history) {
     for (const rec of snapshot.recommendations) {
       rows.push([
         snapshot.timestamp, snapshot.afterOverallPick, snapshot.nextPick,
-        snapshot.picksUntilNextTurn, snapshot.currentRound, rec.rank, rec.playerId,
-        rec.playerName, rec.position, rec.byeWeek, rec.draftScore, rec.positionPriority,
-        rec.saturationMultiplier, rec.projectedPoints, rec.espnRank, rec.averageDraftPosition,
-        rec.consensusRank, rec.consensusValue, rec.consensusSourceCount, rec.marketGap,
-        rec.upside, rec.vor, rec.withinPositionValue, rec.tierDrop, rec.turnRisk, rec.byeTiebreak,
+        snapshot.picksUntilNextTurn, snapshot.followingPick, snapshot.picksUntilFollowing,
+        snapshot.currentRound, rec.rank, rec.playerId, rec.playerName, rec.position, rec.byeWeek,
+        rec.draftScore, rec.positionPriority, rec.saturationMultiplier, rec.projectedPoints,
+        rec.espnRank, rec.averageDraftPosition, rec.consensusRank, rec.consensusValue,
+        rec.consensusSourceCount, rec.marketGap, rec.upside, rec.vor, rec.withinPositionValue,
+        rec.tierDrop, rec.waitRisk, rec.byeTiebreak,
       ].map(csvEscape).join(','));
     }
   }
@@ -202,6 +216,10 @@ function mergeConfig(overrides = {}) {
         ...LEAGUE_CONFIG.strategy.phaseWeights,
         ...(overrides.strategy?.phaseWeights || {}),
       },
+      decisionContext: {
+        ...LEAGUE_CONFIG.strategy.decisionContext,
+        ...(overrides.strategy?.decisionContext || {}),
+      },
     },
   };
 }
@@ -231,8 +249,21 @@ export async function startDraftHelper(overrides = {}) {
 
   const recalculate = () => {
     const draftedPicks = watcher.getPicks();
-    const scored = scoreAvailablePlayers({ players, draftedPicks, myTeamName: config.myTeamName, config, myOverallPicks });
-    const pairs = recommendPairs(scored);
+    const scored = scoreAvailablePlayers({
+      players,
+      draftedPicks,
+      myTeamName: config.myTeamName,
+      config,
+      myOverallPicks,
+    });
+    const pairs = recommendPairs({
+      scoredPlayers: scored,
+      players,
+      draftedPicks,
+      myTeamName: config.myTeamName,
+      config,
+      myOverallPicks,
+    });
     const snapshot = buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName: config.myTeamName });
     const prior = history.at(-1);
     if (!prior || prior.afterOverallPick !== snapshot.afterOverallPick) history.push(snapshot);
