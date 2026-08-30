@@ -51,7 +51,7 @@ export const LEAGUE_CONFIG = {
       K: 8,
     },
     maxRecommendedByPosition: {
-      QB: 4,
+      QB: 3,
       RB: 6,
       WR: 7,
       TE: 2,
@@ -65,6 +65,31 @@ export const LEAGUE_CONFIG = {
       TE: { softTarget: 2, multiplierAfterTarget: 0 },
       DST: { softTarget: 1, multiplierAfterTarget: 0 },
       K: { softTarget: 1, multiplierAfterTarget: 0 },
+    },
+    // Upside should depend on the role we are filling, not just the round.
+    // RB3/RB4, WR4+, and QB3 are the intentional ceiling-chasing spots.
+    depthUpside: {
+      QB: [
+        { minHave: 0, maxHave: 1, multiplier: 0.15 },
+        { minHave: 2, maxHave: 2, multiplier: 1.30 },
+        { minHave: 3, maxHave: 99, multiplier: 0.10 },
+      ],
+      RB: [
+        { minHave: 0, maxHave: 1, multiplier: 0.20 },
+        { minHave: 2, maxHave: 3, multiplier: 1.35 },
+        { minHave: 4, maxHave: 4, multiplier: 0.80 },
+        { minHave: 5, maxHave: 99, multiplier: 0.40 },
+      ],
+      WR: [
+        { minHave: 0, maxHave: 2, multiplier: 0.25 },
+        { minHave: 3, maxHave: 4, multiplier: 1.30 },
+        { minHave: 5, maxHave: 99, multiplier: 1.10 },
+      ],
+      TE: [
+        { minHave: 0, maxHave: 0, multiplier: 0.20 },
+        { minHave: 1, maxHave: 1, multiplier: 0.70 },
+        { minHave: 2, maxHave: 99, multiplier: 0 },
+      ],
     },
     tightEndStrategy: {
       elitePositionRank: 5,
