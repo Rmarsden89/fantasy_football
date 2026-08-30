@@ -44,7 +44,6 @@ function parseFantasyPros(html) {
   for (const cells of tableRows(html)) {
     const rank = Number.parseInt(cells[0], 10);
     if (!Number.isFinite(rank) || rank <= 0) continue;
-
     const playerCell = cells[1] || '';
     const match = playerCell.match(/^(.*?)\s*\(([A-Z]{2,3})\)\s*$/);
     const name = (match?.[1] || playerCell).trim();
@@ -74,12 +73,27 @@ function parsePfn(html) {
 async function fetchText(url) {
   const response = await fetch(url, {
     headers: {
-      'user-agent': 'fantasy-football-draft-helper/0.4 ranking-snapshot-refresh',
+      'user-agent': 'Mozilla/5.0 fantasy-football-draft-helper/0.4',
       accept: 'text/html,application/xhtml+xml',
     },
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
   return response.text();
+}
+
+async function trySource(name, url, parser) {
+  try {
+    const html = await fetchText(url);
+    const players = parser(html);
+    if (players.length < 12) {
+      throw new Error(`parser only found ${players.length} players`);
+    }
+    console.log(`${name}: refreshed ${players.length} players`);
+    return { ok: true, players, error: null };
+  } catch (error) {
+    console.warn(`${name}: refresh skipped (${error.message})`);
+    return { ok: false, players: [], error: error.message };
+  }
 }
 
 function mergePlayers(existing, sourcePlayers, field) {
@@ -97,55 +111,77 @@ function mergePlayers(existing, sourcePlayers, field) {
   }
 }
 
-const [fantasyProsHtml, pfnHtml] = await Promise.all([
-  fetchText(SOURCES.fantasyPros),
-  fetchText(SOURCES.pfn),
-]);
-
-const fantasyPros = parseFantasyPros(fantasyProsHtml);
-const pfn = parsePfn(pfnHtml);
-if (fantasyPros.length < 12) throw new Error(`FantasyPros parser only found ${fantasyPros.length} players; refusing to overwrite snapshot.`);
-if (pfn.length < 12) throw new Error(`PFN parser only found ${pfn.length} players; refusing to overwrite snapshot.`);
-
-let prior = { players: {} };
+let prior = { players: {}, sources: {} };
 try {
   prior = JSON.parse(await fs.readFile(OUT, 'utf8'));
 } catch {
   // First generation is fine.
 }
 
-// Preserve manually captured ESPN draft-board ranks while refreshing web sources.
+const [fantasyProsResult, pfnResult] = await Promise.all([
+  trySource('FantasyPros', SOURCES.fantasyPros, parseFantasyPros),
+  trySource('PFN', SOURCES.pfn, parsePfn),
+]);
+
+if (!fantasyProsResult.ok && !pfnResult.ok) {
+  throw new Error('No ranking source refreshed successfully; refusing to overwrite snapshot.');
+}
+
+// Start from prior data so a temporarily blocked source does not erase useful rankings.
 const players = {};
 for (const player of Object.values(prior.players || {})) {
   const key = normalizeName(player.name);
-  if (Number.isFinite(Number(player.espnDraftRank))) {
-    players[key] = {
-      name: player.name,
-      team: player.team || null,
-      position: player.position || null,
-      espnDraftRank: Number(player.espnDraftRank),
-    };
-  }
+  players[key] = { ...player };
 }
 
-mergePlayers(players, fantasyPros, 'fantasyProsRank');
-mergePlayers(players, pfn, 'pfnRank');
+if (fantasyProsResult.ok) {
+  for (const player of Object.values(players)) delete player.fantasyProsRank;
+  mergePlayers(players, fantasyProsResult.players, 'fantasyProsRank');
+}
+if (pfnResult.ok) {
+  for (const player of Object.values(players)) delete player.pfnRank;
+  mergePlayers(players, pfnResult.players, 'pfnRank');
+}
 
 const today = new Date().toISOString().slice(0, 10);
+const sources = {
+  ...(prior.sources || {}),
+  fantasyPros: {
+    name: 'FantasyPros PPR Superflex',
+    asOf: fantasyProsResult.ok ? today : prior.sources?.fantasyPros?.asOf || null,
+    url: SOURCES.fantasyPros,
+    playerCount: fantasyProsResult.ok
+      ? fantasyProsResult.players.length
+      : Object.values(players).filter((p) => Number.isFinite(Number(p.fantasyProsRank))).length,
+    refreshStatus: fantasyProsResult.ok ? 'refreshed' : 'preserved',
+    refreshError: fantasyProsResult.error,
+  },
+  pfn: {
+    name: 'Pro Football Network Superflex PPR Big Board',
+    asOf: pfnResult.ok ? today : prior.sources?.pfn?.asOf || null,
+    url: SOURCES.pfn,
+    playerCount: pfnResult.ok
+      ? pfnResult.players.length
+      : Object.values(players).filter((p) => Number.isFinite(Number(p.pfnRank))).length,
+    refreshStatus: pfnResult.ok ? 'refreshed' : 'preserved',
+    refreshError: pfnResult.error,
+  },
+};
+
 const snapshot = {
   snapshotVersion: 1,
   season: 2026,
   format: 'PPR_SUPERFLEX',
   generatedAt: today,
-  notes: 'Static pre-draft ranking snapshot. Runtime does not scrape ranking sites. Refresh intentionally before draft day.',
-  sources: {
-    fantasyPros: { name: 'FantasyPros PPR Superflex', asOf: today, url: SOURCES.fantasyPros, playerCount: fantasyPros.length },
-    pfn: { name: 'Pro Football Network Superflex PPR Big Board', asOf: today, url: SOURCES.pfn, playerCount: pfn.length },
-  },
+  notes: 'Static pre-draft ranking snapshot. Runtime does not scrape ranking sites. Refresh intentionally before draft day; blocked sources preserve their prior ranks.',
+  sources,
   players,
 };
 
 await fs.mkdir(path.dirname(OUT), { recursive: true });
 await fs.writeFile(OUT, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
 console.log(`Wrote ${OUT}`);
-console.log(`FantasyPros: ${fantasyPros.length} players; PFN: ${pfn.length} players; merged: ${Object.keys(players).length}`);
+console.log(
+  `FantasyPros: ${sources.fantasyPros.playerCount} (${sources.fantasyPros.refreshStatus}); ` +
+  `PFN: ${sources.pfn.playerCount} (${sources.pfn.refreshStatus}); merged: ${Object.keys(players).length}`,
+);
