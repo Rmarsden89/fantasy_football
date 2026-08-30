@@ -2,27 +2,33 @@
   "snapshotVersion": 1,
   "season": 2026,
   "format": "PPR_SUPERFLEX",
-  "generatedAt": "2026-08-29",
+  "generatedAt": "2026-08-30",
   "notes": "Checked-in runtime snapshot. Refresh before draft day with npm run rankings:refresh. ESPN draft-board ranks can be added to players as espnDraftRank when captured from the live board.",
   "sources": {
     "fantasyPros": {
       "name": "FantasyPros PPR Superflex ECR",
       "asOf": "2026-08-29",
-      "url": "https://www.fantasypros.com/nfl/fantasy-football-rankings/ppr-superflex.php"
+      "url": "https://www.fantasypros.com/nfl/rankings/ppr-superflex-cheatsheets.php"
+    },
+    "pfn": {
+      "name": "Pro Football Network Superflex PPR Big Board",
+      "asOf": "2026-08-30",
+      "url": "https://www.profootballnetwork.com/fantasy-hq/overall-rankings-superflex-ppr"
     }
   },
   "players": {
-    "josh allen": { "name": "Josh Allen", "team": "BUF", "position": "QB", "fantasyProsRank": 1, "fantasyProsExpertRanks": [1, 4, 1] },
-    "drake maye": { "name": "Drake Maye", "team": "NE", "position": "QB", "fantasyProsRank": 2, "fantasyProsExpertRanks": [2, 1, 3] },
-    "lamar jackson": { "name": "Lamar Jackson", "team": "BAL", "position": "QB", "fantasyProsRank": 3, "fantasyProsExpertRanks": [5, 5, 2] },
-    "jahmyr gibbs": { "name": "Jahmyr Gibbs", "team": "DET", "position": "RB", "fantasyProsRank": 4, "fantasyProsExpertRanks": [10, 2, 4] },
-    "bijan robinson": { "name": "Bijan Robinson", "team": "ATL", "position": "RB", "fantasyProsRank": 5, "fantasyProsExpertRanks": [13, 3, 5] },
-    "joe burrow": { "name": "Joe Burrow", "team": "CIN", "position": "QB", "fantasyProsRank": 6, "fantasyProsExpertRanks": [4, 7, 12] },
-    "puka nacua": { "name": "Puka Nacua", "team": "LAR", "position": "WR", "fantasyProsRank": 7, "fantasyProsExpertRanks": [6, 12, 6] },
-    "ja'marr chase": { "name": "Ja'Marr Chase", "team": "CIN", "position": "WR", "fantasyProsRank": 8, "fantasyProsExpertRanks": [11, 8, 7] },
-    "jayden daniels": { "name": "Jayden Daniels", "team": "WAS", "position": "QB", "fantasyProsRank": 9, "fantasyProsExpertRanks": [7, 10, 9] },
-    "jalen hurts": { "name": "Jalen Hurts", "team": "PHI", "position": "QB", "fantasyProsRank": 10, "fantasyProsExpertRanks": [3, 16, 8] },
-    "amon-ra st. brown": { "name": "Amon-Ra St. Brown", "team": "DET", "position": "WR", "fantasyProsRank": 11, "fantasyProsExpertRanks": [12, 13, 11] },
-    "justin herbert": { "name": "Justin Herbert", "team": "LAC", "position": "QB", "fantasyProsRank": 12, "fantasyProsExpertRanks": [18, 6, 14] }
+    "josh allen": { "name": "Josh Allen", "team": "BUF", "position": "QB", "fantasyProsRank": 1, "pfnRank": 1 },
+    "drake maye": { "name": "Drake Maye", "team": "NE", "position": "QB", "fantasyProsRank": 3, "pfnRank": 2 },
+    "lamar jackson": { "name": "Lamar Jackson", "team": "BAL", "position": "QB", "fantasyProsRank": 2, "pfnRank": 4 },
+    "joe burrow": { "name": "Joe Burrow", "team": "CIN", "position": "QB", "fantasyProsRank": 4, "pfnRank": 6 },
+    "jalen hurts": { "name": "Jalen Hurts", "team": "PHI", "position": "QB", "fantasyProsRank": 5 },
+    "jayden daniels": { "name": "Jayden Daniels", "team": "WAS", "position": "QB", "fantasyProsRank": 6 },
+    "jahmyr gibbs": { "name": "Jahmyr Gibbs", "team": "DET", "position": "RB", "fantasyProsRank": 7, "pfnRank": 5 },
+    "ja'marr chase": { "name": "Ja'Marr Chase", "team": "CIN", "position": "WR", "fantasyProsRank": 8, "pfnRank": 3 },
+    "bijan robinson": { "name": "Bijan Robinson", "team": "ATL", "position": "RB", "fantasyProsRank": 9 },
+    "puka nacua": { "name": "Puka Nacua", "team": "LAR", "position": "WR", "fantasyProsRank": 10 },
+    "justin herbert": { "name": "Justin Herbert", "team": "LAC", "position": "QB", "fantasyProsRank": 11 },
+    "jaxon smith-njigba": { "name": "Jaxon Smith-Njigba", "team": "SEA", "position": "WR", "fantasyProsRank": 12 },
+    "amon-ra st. brown": { "name": "Amon-Ra St. Brown", "team": "DET", "position": "WR", "fantasyProsRank": 13 }
   }
 }
