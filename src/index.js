@@ -2,9 +2,10 @@ import { LEAGUE_CONFIG, getMySnakePicks } from './config.js';
 import { applyConsensusModel } from './consensusModel.js';
 import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
+import { buildExternalRankingsFromSnapshot, DEFAULT_RANKING_SNAPSHOT } from './rankingSnapshot.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
-const HELPER_VERSION = '0.3.3-need-vs-value';
+const HELPER_VERSION = '0.4.0-static-consensus';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
@@ -44,6 +45,9 @@ function printRecommendations(scored, pairs, count = 10) {
       needQuality: Number((player.needQualityMultiplier ?? 1).toFixed(2)),
       consensusRank: player.consensusRank,
       sources: player.consensusSourceCount,
+      fantasyPros: player.consensusSourceRanks?.fantasyPros ?? null,
+      espnBoard: player.consensusSourceRanks?.espnDraftRank ?? null,
+      espnApi: player.consensusSourceRanks?.espnRank ?? null,
       projected: player.projectedPoints,
       adp: player.averageDraftPosition,
       upside: Number(player.components.upside.toFixed(1)),
@@ -131,6 +135,7 @@ function buildHistorySnapshot({ draftedPicks, scored, pairs, myTeamName }) {
     consensusRank: player.consensusRank,
     consensusValue: player.consensusValue,
     consensusSourceCount: player.consensusSourceCount,
+    consensusSourceRanks: player.consensusSourceRanks,
     marketGap: player.marketGap,
     draftScore: player.draftScore,
     positionPriority: player.positionPriority,
@@ -176,7 +181,8 @@ function historyToCsv(history) {
     'position', 'byeWeek', 'draftScore', 'positionPriority', 'basePositionPriority',
     'needQualityMultiplier', 'saturationMultiplier', 'projectedPoints', 'espnRank',
     'averageDraftPosition', 'consensusRank', 'consensusValue', 'consensusSourceCount',
-    'marketGap', 'upside', 'vor', 'withinPositionValue', 'tierDrop', 'waitRisk', 'byeTiebreak',
+    'fantasyProsRank', 'espnDraftRank', 'marketGap', 'upside', 'vor', 'withinPositionValue',
+    'tierDrop', 'waitRisk', 'byeTiebreak',
   ];
   const rows = [headers.join(',')];
   for (const snapshot of history) {
@@ -187,8 +193,10 @@ function historyToCsv(history) {
         snapshot.currentRound, rec.rank, rec.playerId, rec.playerName, rec.position, rec.byeWeek,
         rec.draftScore, rec.positionPriority, rec.basePositionPriority, rec.needQualityMultiplier,
         rec.saturationMultiplier, rec.projectedPoints, rec.espnRank, rec.averageDraftPosition,
-        rec.consensusRank, rec.consensusValue, rec.consensusSourceCount, rec.marketGap, rec.upside,
-        rec.vor, rec.withinPositionValue, rec.tierDrop, rec.waitRisk, rec.byeTiebreak,
+        rec.consensusRank, rec.consensusValue, rec.consensusSourceCount,
+        rec.consensusSourceRanks?.fantasyPros, rec.consensusSourceRanks?.espnDraftRank,
+        rec.marketGap, rec.upside, rec.vor, rec.withinPositionValue, rec.tierDrop,
+        rec.waitRisk, rec.byeTiebreak,
       ].map(csvEscape).join(','));
     }
   }
@@ -239,23 +247,39 @@ function mergeConfig(overrides = {}) {
   };
 }
 
+function mergeExternalRankings(base = {}, override = {}) {
+  const merged = { ...base };
+  for (const [sourceName, source] of Object.entries(override || {})) {
+    merged[sourceName] = {
+      ...(merged[sourceName] || {}),
+      ...(source || {}),
+      byId: { ...(merged[sourceName]?.byId || {}), ...(source?.byId || {}) },
+      byName: { ...(merged[sourceName]?.byName || {}), ...(source?.byName || {}) },
+    };
+  }
+  return merged;
+}
+
 export async function startDraftHelper(overrides = {}) {
   const config = mergeConfig(overrides);
   console.log(`Starting Fantasy Draft Helper ${HELPER_VERSION}`);
   console.log('Loading ESPN player pool...');
   const espnPlayers = await fetchEspnPlayerPool({ leagueId: config.leagueId, season: config.season });
 
-  const externalRankings = overrides.externalRankings || window.__fantasyConsensusData || {};
+  const snapshotBundle = buildExternalRankingsFromSnapshot(overrides.rankingSnapshot || DEFAULT_RANKING_SNAPSHOT);
+  const runtimeRankings = overrides.externalRankings || window.__fantasyConsensusData || {};
+  const externalRankings = mergeExternalRankings(snapshotBundle.externalRankings, runtimeRankings);
   const players = applyConsensusModel(espnPlayers, {
     sourceWeights: config.strategy.consensus.sourceWeights,
     rankCeiling: config.strategy.consensus.rankCeiling,
     externalRankings,
   });
   const externalSources = Object.keys(externalRankings);
-  console.log(`Loaded ${players.length} players. Consensus sources: ESPN rank, market ADP${externalSources.length ? `, ${externalSources.join(', ')}` : ''}.`);
-  if (!externalSources.length) {
-    console.info('External consensus source not loaded yet; ESPN rank + market ADP are the active baseline inputs.');
-  }
+  console.log(
+    `Loaded ${players.length} players. Static ranking snapshot ${snapshotBundle.rankingSnapshot.generatedAt || 'unknown date'}; ` +
+    `FantasyPros matches: ${snapshotBundle.sourceSummary.fantasyPros}; ESPN-board matches: ${snapshotBundle.sourceSummary.espnDraftRank}.`,
+  );
+  console.log(`Consensus sources configured: ${['fantasyPros', 'espnDraftRank', 'marketAdp', 'espnRank'].join(', ')}.`);
 
   const myOverallPicks = getMySnakePicks(18, config);
   const history = [];
@@ -303,6 +327,8 @@ export async function startDraftHelper(overrides = {}) {
     version: HELPER_VERSION,
     config,
     players,
+    rankingSnapshot: snapshotBundle.rankingSnapshot,
+    externalRankings,
     watcher,
     state: null,
     history,
@@ -311,7 +337,12 @@ export async function startDraftHelper(overrides = {}) {
       const payload = {
         version: HELPER_VERSION,
         exportedAt: new Date().toISOString(),
-        consensusSources: ['espnRank', 'marketAdp', ...externalSources],
+        rankingSnapshot: {
+          generatedAt: snapshotBundle.rankingSnapshot.generatedAt,
+          format: snapshotBundle.rankingSnapshot.format,
+          sourceSummary: snapshotBundle.sourceSummary,
+        },
+        consensusSources: ['fantasyPros', 'espnDraftRank', 'marketAdp', 'espnRank'],
         config,
         history,
         finalState: window.__fantasyDraftHelper.state,
