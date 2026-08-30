@@ -162,6 +162,15 @@ function saturationMultiplier(position, counts, config) {
   return settings.multiplierAfterTarget ?? 1;
 }
 
+function missingStarterUrgencyMultiplier(position, counts, currentRound, config) {
+  const required = config.roster[position] || 0;
+  if (!required || (counts[position] || 0) >= required) return 1;
+  if (position !== 'TE') return 1;
+  const curve = config.strategy.tightEndStrategy?.missingStarterUrgency || [];
+  const match = curve.find((step) => currentRound <= step.throughRound);
+  return match?.multiplier ?? 1;
+}
+
 export function computePositionPriorities({
   draftedPicks,
   myTeamName,
@@ -190,7 +199,8 @@ export function computePositionPriorities({
       0,
     );
     const eligible = isPositionEligible(position, currentRound, config, counts);
-    let priority = eligible ? rawPriority : 0;
+    const missingStarterUrgency = missingStarterUrgencyMultiplier(position, counts, currentRound, config);
+    let priority = eligible ? rawPriority * missingStarterUrgency : 0;
 
     if (position === 'TE' && (counts.TE || 0) >= 1 && eligible) {
       const teStrategy = config.strategy.tightEndStrategy || {};
@@ -209,6 +219,7 @@ export function computePositionPriorities({
       position,
       priority: Number(priority.toFixed(2)),
       rawPriority: Number(rawPriority.toFixed(2)),
+      missingStarterUrgencyMultiplier: missingStarterUrgency,
       eligible,
       eligibleRound: earliestRoundForPosition(position, config),
       have: counts[position] || 0,
@@ -325,6 +336,24 @@ function phaseWeights(currentRound, config) {
   return phases.late;
 }
 
+function needQualityMultiplier(position, counts, player, withinValue, config) {
+  const required = config.roster[position] || 0;
+  if (!required || (counts[position] || 0) >= required) return 1;
+  if (position !== 'TE') return 1;
+
+  const gate = config.strategy.tightEndStrategy?.playerQualityGate;
+  if (!gate) return 1;
+  const consensus = Number.isFinite(player.consensusValue) ? player.consensusValue : 50;
+  const quality = clamp(consensus * 0.65 + withinValue * 0.35);
+  const minimum = gate.minimum ?? 52;
+  const fullCredit = Math.max(gate.fullCredit ?? 78, minimum + 1);
+  const minimumMultiplier = gate.minimumMultiplier ?? 0.35;
+  if (quality >= fullCredit) return 1;
+  if (quality <= minimum) return minimumMultiplier;
+  const progress = (quality - minimum) / (fullCredit - minimum);
+  return minimumMultiplier + progress * (1 - minimumMultiplier);
+}
+
 export function buildDraftState({ players, draftedPicks, myTeamName }) {
   const draftedIds = new Set(draftedPicks.filter((pick) => pick.playerId).map((pick) => pick.playerId));
   const draftedNames = new Set(draftedPicks.map((pick) => pick.playerName?.toLowerCase()).filter(Boolean));
@@ -368,8 +397,6 @@ export function scoreAvailablePlayers({
     isPositionEligible(normalizePosition(player.position), currentRound, config, counts),
   );
   const availableByPosition = sortByPosition(eligibleAvailable);
-  // Stable player-quality components are anchored to the full player pool.
-  // Live draft state still affects availability, depletion, roster need, and wait risk.
   const baselineByPosition = sortByPosition(players);
   const positionPriorities = computePositionPriorities({
     draftedPicks,
@@ -385,11 +412,16 @@ export function scoreAvailablePlayers({
     const position = normalizePosition(player.position);
     const availablePositionPlayers = availableByPosition[position] || [];
     const baselinePositionPlayers = baselineByPosition[position] || [];
-    const positionPriority = positionPriorities[position]?.priority || 0;
+    const basePositionPriority = positionPriorities[position]?.priority || 0;
     const saturation = positionPriorities[position]?.saturationMultiplier ?? 1;
+    const withinValue = withinPositionValue(player, baselinePositionPlayers);
+    const qualityGate = needQualityMultiplier(position, counts, player, withinValue, config);
+    const effectivePositionPriority = basePositionPriority * qualityGate;
     const components = {
-      positionPriority,
-      withinPositionValue: withinPositionValue(player, baselinePositionPlayers),
+      positionPriority: effectivePositionPriority,
+      basePositionPriority,
+      needQualityMultiplier: qualityGate,
+      withinPositionValue: withinValue,
       vor: valueOverReplacement(player, baselinePositionPlayers, config.strategy.replacementRanks[position] || 8),
       consensusValue: Number.isFinite(player.consensusValue) ? player.consensusValue : 50,
       upside: upsideScore(player, currentRound),
@@ -398,7 +430,7 @@ export function scoreAvailablePlayers({
         player,
         following.picksUntilFollowing,
         availablePositionPlayers,
-        positionPriority,
+        effectivePositionPriority,
       ),
       byeTiebreak: byeTiebreakScore(player, state.myPicks, players, config),
     };
@@ -414,7 +446,9 @@ export function scoreAvailablePlayers({
       position,
       draftScore: Number(draftScore.toFixed(2)),
       components,
-      positionPriority,
+      positionPriority: effectivePositionPriority,
+      basePositionPriority,
+      needQualityMultiplier: qualityGate,
       saturationMultiplier: saturation,
       currentRound,
       nextPick: turn.nextPick,
