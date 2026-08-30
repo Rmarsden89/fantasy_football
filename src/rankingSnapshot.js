@@ -4,6 +4,8 @@ function normalizeName(name) {
   return String(name || '')
     .toLowerCase()
     .replace(/[’]/g, "'")
+    .replace(/[.,]/g, '')
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
