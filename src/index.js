@@ -3,9 +3,9 @@ import { applyConsensusModel } from './consensusModel.js';
 import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { buildExternalRankingsFromSnapshot, DEFAULT_RANKING_SNAPSHOT } from './rankingSnapshot.js';
-import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
+import { recommendPairs, scoreAvailablePlayers } from './strategyRecommendationEngine.js';
 
-const HELPER_VERSION = '0.4.0-static-consensus';
+const HELPER_VERSION = '0.4.1-depth-upside';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
@@ -51,6 +51,8 @@ function printRecommendations(scored, pairs, count = 10) {
       projected: player.projectedPoints,
       adp: player.averageDraftPosition,
       upside: Number(player.components.upside.toFixed(1)),
+      upsideBase: Number((player.components.upsideBase ?? player.components.upside).toFixed(1)),
+      upsideMult: Number((player.components.upsideMultiplier ?? 1).toFixed(2)),
       vor: Number(player.components.vor.toFixed(1)),
       waitRisk: Number(player.components.waitRisk.toFixed(1)),
       byeTie: Number(player.components.byeTiebreak.toFixed(1)),
@@ -181,8 +183,8 @@ function historyToCsv(history) {
     'position', 'byeWeek', 'draftScore', 'positionPriority', 'basePositionPriority',
     'needQualityMultiplier', 'saturationMultiplier', 'projectedPoints', 'espnRank',
     'averageDraftPosition', 'consensusRank', 'consensusValue', 'consensusSourceCount',
-    'fantasyProsRank', 'espnDraftRank', 'marketGap', 'upside', 'vor', 'withinPositionValue',
-    'tierDrop', 'waitRisk', 'byeTiebreak',
+    'fantasyProsRank', 'espnDraftRank', 'marketGap', 'upside', 'upsideBase', 'upsideMultiplier',
+    'vor', 'withinPositionValue', 'tierDrop', 'waitRisk', 'byeTiebreak',
   ];
   const rows = [headers.join(',')];
   for (const snapshot of history) {
@@ -195,8 +197,8 @@ function historyToCsv(history) {
         rec.saturationMultiplier, rec.projectedPoints, rec.espnRank, rec.averageDraftPosition,
         rec.consensusRank, rec.consensusValue, rec.consensusSourceCount,
         rec.consensusSourceRanks?.fantasyPros, rec.consensusSourceRanks?.espnDraftRank,
-        rec.marketGap, rec.upside, rec.vor, rec.withinPositionValue, rec.tierDrop,
-        rec.waitRisk, rec.byeTiebreak,
+        rec.marketGap, rec.upside, rec.upsideBase, rec.upsideMultiplier, rec.vor,
+        rec.withinPositionValue, rec.tierDrop, rec.waitRisk, rec.byeTiebreak,
       ].map(csvEscape).join(','));
     }
   }
@@ -218,6 +220,10 @@ function mergeConfig(overrides = {}) {
       replacementRanks: {
         ...LEAGUE_CONFIG.strategy.replacementRanks,
         ...(overrides.strategy?.replacementRanks || {}),
+      },
+      depthUpside: {
+        ...LEAGUE_CONFIG.strategy.depthUpside,
+        ...(overrides.strategy?.depthUpside || {}),
       },
       consensus: {
         ...LEAGUE_CONFIG.strategy.consensus,
