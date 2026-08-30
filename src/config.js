@@ -71,14 +71,28 @@ export const LEAGUE_CONFIG = {
       eliteStarterPriorityCap: 8,
       normalStarterPriorityCap: 20,
       backupEarliestRound: 10,
-      // An empty TE slot matters, but it should not carry the same FLEX/depth
-      // urgency as RB/WR. Elite individual TEs can still rise on player value.
       unfilledFlexNeed: 25,
       unfilledDepthNeed: 70,
+      // A missing TE should become more urgent over time, but it should not
+      // dominate the draft from Round 1 simply because the starter slot is empty.
+      missingStarterUrgency: [
+        { throughRound: 3, multiplier: 0.70 },
+        { throughRound: 7, multiplier: 0.82 },
+        { throughRound: 10, multiplier: 0.96 },
+        { throughRound: 18, multiplier: 1.08 },
+      ],
+      // Positional need only gets its full weight for TEs who are themselves
+      // credible values. This keeps TE desperation from elevating a weak TE
+      // over clearly better RB/WR/QB options.
+      playerQualityGate: {
+        minimum: 52,
+        fullCredit: 78,
+        minimumMultiplier: 0.35,
+      },
     },
     specialTeamsEarliestRound: {
-      DST: 14,
-      K: 15,
+      DST: 16,
+      K: 17,
     },
     positionWeights: {
       starterNeed: 0.50,
@@ -96,8 +110,8 @@ export const LEAGUE_CONFIG = {
       },
       rankCeiling: 240,
     },
-    // Core player value is intentionally stable. Live availability affects
-    // wait risk and depletion, but not a player's baseline VOR/tier quality.
+    // Core player value is intentionally stable. Wait risk is no longer part
+    // of these weights; it is used only when two players are close in value.
     phaseWeights: {
       early: {
         throughRound: 6,
@@ -127,7 +141,7 @@ export const LEAGUE_CONFIG = {
       },
     },
     decisionContext: {
-      // Reorder only true near-ties; a 2-3 point core value edge should win.
+      // Only allow wait risk to reorder players whose stable scores are close.
       waitRiskScoreWindow: 0.75,
       upsideTiebreakStartsRound: 7,
     },
