@@ -3,7 +3,13 @@ function clamp(value, min = 0, max = 100) {
 }
 
 function normalizeName(name) {
-  return String(name || '').trim().toLowerCase();
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[.,]/g, '')
+    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function rankScore(rank, ceiling = 240) {
@@ -16,6 +22,12 @@ function lookupExternalRank(player, source) {
   if (source.byId && player.id in source.byId) return Number(source.byId[player.id]);
   const key = normalizeName(player.name);
   if (source.byName && key in source.byName) return Number(source.byName[key]);
+
+  if (source.byName) {
+    for (const [name, rank] of Object.entries(source.byName)) {
+      if (normalizeName(name) === key) return Number(rank);
+    }
+  }
   return null;
 }
 
