@@ -4,7 +4,7 @@ import { createEspnDraftWatcher } from './espnDraftWatcher.js';
 import { fetchEspnPlayerPool } from './espnPlayerPool.js';
 import { recommendPairs, scoreAvailablePlayers } from './recommendationEngine.js';
 
-const HELPER_VERSION = '0.3.1-stable-sequential-pairs';
+const HELPER_VERSION = '0.3.2-anchored-player-value';
 
 function printRecommendations(scored, pairs, count = 10) {
   console.group(`Fantasy Draft Helper ${HELPER_VERSION}`);
@@ -230,10 +230,6 @@ export async function startDraftHelper(overrides = {}) {
   console.log('Loading ESPN player pool...');
   const espnPlayers = await fetchEspnPlayerPool({ leagueId: config.leagueId, season: config.season });
 
-  // Optional external ranking input. Example:
-  // window.__fantasyConsensusData = {
-  //   fantasyPros: { byName: { 'ja\'marr chase': 3, 'patrick mahomes': 24 } }
-  // };
   const externalRankings = overrides.externalRankings || window.__fantasyConsensusData || {};
   const players = applyConsensusModel(espnPlayers, {
     sourceWeights: config.strategy.consensus.sourceWeights,
