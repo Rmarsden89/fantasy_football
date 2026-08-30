@@ -143,7 +143,7 @@ export function applyAiRerank(scoredPlayers, response, candidateLimit = 8) {
 
 async function endpointProvider(endpoint, payload, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(new Error(`AI reranker timed out after ${timeoutMs}ms`)), timeoutMs);
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -151,8 +151,24 @@ async function endpointProvider(endpoint, payload, timeoutMs) {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`AI reranker endpoint returned ${response.status}`);
-    return await response.json();
+
+    const text = await response.text();
+    let body = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+
+    if (!response.ok) {
+      const detail = body?.error || text || `HTTP ${response.status}`;
+      throw new Error(`AI reranker endpoint returned ${response.status}: ${detail}`);
+    }
+
+    if (!body) throw new Error('AI reranker endpoint returned an empty or invalid JSON response.');
+    return body;
   } finally {
     clearTimeout(timer);
   }
@@ -182,7 +198,7 @@ export async function rerankWithAi({
   const effectiveProvider = typeof provider === 'function'
     ? provider
     : settings.endpoint
-      ? (input) => endpointProvider(settings.endpoint, input, settings.timeoutMs ?? 2500)
+      ? (input) => endpointProvider(settings.endpoint, input, settings.timeoutMs ?? 10000)
       : null;
 
   if (!effectiveProvider) {
