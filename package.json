@@ -6,6 +6,7 @@
   "scripts": {
     "build": "esbuild src/index.js --bundle --format=iife --global-name=FantasyDraftHelper --outfile=dist/draft-helper.js",
     "test": "node --test",
+    "reranker": "node scripts/reranker-server.mjs",
     "rankings:refresh": "node scripts/refresh-rankings.mjs",
     "rankings:import-fantasypros": "node scripts/import-fantasypros-csv.mjs"
   },
