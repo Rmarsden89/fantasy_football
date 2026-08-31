@@ -1,12 +1,13 @@
 const DEFAULT_POLICY = [
-  'Reorder only the supplied candidates. Never introduce another player.',
+  'Reorder only the supplied candidates and turn plans. Never introduce another player or plan.',
   'Respect deterministic eligibility and roster caps. The deterministic engine remains authoritative for who is eligible.',
+  'Treat this as a two-pick snake-turn decision when turn plans are supplied: recommend both picks together, not only the first player.',
   'QB1/QB2 prioritize reliable starter quality and consensus; QB3 may favor upside.',
   'RB1/RB2 prioritize starter quality; RB3/RB4 may favor ceiling and breakout paths; RB5+ requires exceptional value.',
   'WR1-WR3 prioritize starter quality; WR4+ may favor ceiling and breakout paths.',
   'TE2 is value/insurance, not a default priority.',
   'DST and K remain subject to deterministic round gates.',
-  'Prefer the candidate that best improves this roster now when deterministic scores are close.',
+  'Prefer the turn plan that best improves this roster now when deterministic scores are close.',
 ];
 
 function normalizePosition(position) {
@@ -35,31 +36,21 @@ function latestDraftPick(draftedPicks) {
 
 export function isSecondPickOfSnakeTurn({ scoredPlayers, draftedPicks, config }) {
   if (String(config?.draftType || '').toUpperCase() !== 'SNAKE') return false;
-
   const latest = latestDraftPick(draftedPicks);
   if (!latest || latest.fantasyTeam !== config?.myTeamName) return false;
-
   const nextPick = Number(scoredPlayers?.nextPick ?? scoredPlayers?.[0]?.nextPick);
   const latestOverallPick = Number(latest.overallPick);
-  return Number.isFinite(nextPick)
-    && Number.isFinite(latestOverallPick)
-    && nextPick === latestOverallPick + 1;
+  return Number.isFinite(nextPick) && Number.isFinite(latestOverallPick) && nextPick === latestOverallPick + 1;
 }
 
 export function shouldRunAiRerank({ scoredPlayers, draftedPicks, config }) {
-  // The live AI layer is intentionally a snake-draft, on-the-clock feature.
-  // Run once at the start of our turn. If our first pick is immediately followed
-  // by our second snake pick, keep the pair plan and do not spend another AI call.
   if (String(config?.draftType || '').toUpperCase() !== 'SNAKE') return false;
-
   const nextPick = Number(scoredPlayers?.nextPick ?? scoredPlayers?.[0]?.nextPick);
   if (!Number.isFinite(nextPick)) return false;
-
   const latest = latestDraftPick(draftedPicks);
   const latestOverallPick = Number(latest?.overallPick ?? 0);
   const onClock = nextPick === latestOverallPick + 1;
   if (!onClock) return false;
-
   return !isSecondPickOfSnakeTurn({ scoredPlayers, draftedPicks, config });
 }
 
@@ -87,14 +78,33 @@ function candidatePayload(player, deterministicRank) {
   };
 }
 
+function pairPayload(pair, index) {
+  return {
+    pairId: `pair-${index + 1}`,
+    deterministicPairRank: index + 1,
+    firstPlayerId: pair.first.id,
+    firstPlayerName: pair.first.name,
+    firstPosition: pair.first.position,
+    secondPlayerId: pair.second.id,
+    secondPlayerName: pair.second.name,
+    secondPosition: pair.second.position,
+    firstScore: pair.first.draftScore,
+    secondScoreAfterFirst: pair.secondScoreAfterFirst,
+    pairScore: pair.pairScore,
+  };
+}
+
 export function buildAiRerankPayload({
   scoredPlayers,
+  pairs = [],
   draftedPicks,
   myTeamName,
   config,
   candidateLimit = 8,
+  pairLimit = 5,
 }) {
   const candidates = scoredPlayers.slice(0, candidateLimit);
+  const turnPairs = pairs.slice(0, pairLimit).map(pairPayload);
   const counts = rosterCounts(draftedPicks, myTeamName);
   const myRoster = (draftedPicks || [])
     .filter((pick) => pick.fantasyTeam === myTeamName)
@@ -106,13 +116,14 @@ export function buildAiRerankPayload({
     }));
 
   return {
-    task: 'Rerank these fantasy-football draft candidates for the current roster state.',
+    task: turnPairs.length
+      ? 'Rerank these two-pick snake-turn plans. Return the best complete pair plan, plus a supporting player ranking.'
+      : 'Rerank these fantasy-football draft candidates for the current roster state.',
     rules: DEFAULT_POLICY,
     responseFormat: {
-      rankings: [
-        { playerId: 'candidate playerId', reason: 'short reason', confidence: 0.0 },
-      ],
-      summary: 'optional short explanation',
+      pairRankings: [{ pairId: 'supplied pairId', reason: 'short turn-level reason', confidence: 0.0 }],
+      rankings: [{ playerId: 'candidate playerId', reason: 'short reason', confidence: 0.0 }],
+      summary: 'state the recommended first AND second pick when turn plans are supplied',
     },
     league: {
       teams: config.teams,
@@ -129,13 +140,12 @@ export function buildAiRerankPayload({
       myRoster,
     },
     candidates: candidates.map((player, index) => candidatePayload(player, index + 1)),
+    turnPairs,
   };
 }
 
 function normalizeRankingItems(response) {
-  if (Array.isArray(response)) {
-    return response.map((item) => typeof item === 'object' ? item : { playerId: item });
-  }
+  if (Array.isArray(response)) return response.map((item) => typeof item === 'object' ? item : { playerId: item });
   if (Array.isArray(response?.rankings)) return response.rankings;
   return [];
 }
@@ -170,15 +180,60 @@ export function applyAiRerank(scoredPlayers, response, candidateLimit = 8) {
   }
 
   const combined = [...reranked, ...tail];
-  for (const key of ['positionPriorities', 'currentRound', 'phaseWeights', 'nextPick', 'followingPick', 'picksUntilFollowing']) {
-    combined[key] = scoredPlayers[key];
-  }
+  for (const key of ['positionPriorities', 'currentRound', 'phaseWeights', 'nextPick', 'followingPick', 'picksUntilFollowing']) combined[key] = scoredPlayers[key];
 
   return {
     scoredPlayers: combined,
     decisions: decisions.map((decision, index) => ({ ...decision, aiRank: index + 1 })),
     summary: typeof response?.summary === 'string' ? response.summary : null,
   };
+}
+
+function applyAiPairRerank(pairs, response, pairLimit = 5) {
+  const supplied = pairs.slice(0, pairLimit).map((pair, index) => ({ pair, pairId: `pair-${index + 1}`, deterministicPairRank: index + 1 }));
+  const byId = new Map(supplied.map((item) => [item.pairId, item]));
+  const used = new Set();
+  const pairDecisions = [];
+
+  for (const item of response?.pairRankings || []) {
+    const key = String(item?.pairId ?? '');
+    if (!byId.has(key) || used.has(key)) continue;
+    const entry = byId.get(key);
+    used.add(key);
+    pairDecisions.push({
+      pairId: key,
+      aiPairRank: pairDecisions.length + 1,
+      deterministicPairRank: entry.deterministicPairRank,
+      firstPlayerId: entry.pair.first.id,
+      firstPlayerName: entry.pair.first.name,
+      firstPosition: entry.pair.first.position,
+      secondPlayerId: entry.pair.second.id,
+      secondPlayerName: entry.pair.second.name,
+      secondPosition: entry.pair.second.position,
+      pairScore: entry.pair.pairScore,
+      reason: typeof item?.reason === 'string' ? item.reason : null,
+      confidence: Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : null,
+    });
+  }
+
+  for (const entry of supplied) {
+    if (used.has(entry.pairId)) continue;
+    pairDecisions.push({
+      pairId: entry.pairId,
+      aiPairRank: pairDecisions.length + 1,
+      deterministicPairRank: entry.deterministicPairRank,
+      firstPlayerId: entry.pair.first.id,
+      firstPlayerName: entry.pair.first.name,
+      firstPosition: entry.pair.first.position,
+      secondPlayerId: entry.pair.second.id,
+      secondPlayerName: entry.pair.second.name,
+      secondPosition: entry.pair.second.position,
+      pairScore: entry.pair.pairScore,
+      reason: null,
+      confidence: null,
+    });
+  }
+  return pairDecisions;
 }
 
 async function endpointProvider(endpoint, payload, timeoutMs) {
@@ -191,22 +246,15 @@ async function endpointProvider(endpoint, payload, timeoutMs) {
       body: JSON.stringify(payload),
       signal: controller.signal,
     });
-
     const text = await response.text();
     let body = null;
     if (text) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = null;
-      }
+      try { body = JSON.parse(text); } catch { body = null; }
     }
-
     if (!response.ok) {
       const detail = body?.error || text || `HTTP ${response.status}`;
       throw new Error(`AI reranker endpoint returned ${response.status}: ${detail}`);
     }
-
     if (!body) throw new Error('AI reranker endpoint returned an empty or invalid JSON response.');
     return body;
   } finally {
@@ -214,66 +262,32 @@ async function endpointProvider(endpoint, payload, timeoutMs) {
   }
 }
 
-export async function rerankWithAi({
-  scoredPlayers,
-  draftedPicks,
-  myTeamName,
-  config,
-  provider = null,
-}) {
+export async function rerankWithAi({ scoredPlayers, pairs = [], draftedPicks, myTeamName, config, provider = null }) {
   const settings = config.strategy?.aiReranker || {};
   const candidateLimit = settings.candidateLimit ?? 8;
-  if (settings.enabled === false) {
-    return { status: 'disabled', scoredPlayers, payload: null, decisions: [], summary: null };
-  }
+  const pairLimit = settings.pairLimit ?? 5;
+  if (settings.enabled === false) return { status: 'disabled', scoredPlayers, payload: null, decisions: [], pairDecisions: [], summary: null };
 
   if (isSecondPickOfSnakeTurn({ scoredPlayers, draftedPicks, config })) {
-    return {
-      status: 'skipped_pair_followup',
-      scoredPlayers,
-      payload: null,
-      decisions: [],
-      summary: null,
-    };
+    return { status: 'skipped_pair_followup', scoredPlayers, payload: null, decisions: [], pairDecisions: [], summary: null };
   }
-
   if (!shouldRunAiRerank({ scoredPlayers, draftedPicks, config })) {
-    return {
-      status: 'skipped_not_on_clock',
-      scoredPlayers,
-      payload: null,
-      decisions: [],
-      summary: null,
-    };
+    return { status: 'skipped_not_on_clock', scoredPlayers, payload: null, decisions: [], pairDecisions: [], summary: null };
   }
 
-  const payload = buildAiRerankPayload({
-    scoredPlayers,
-    draftedPicks,
-    myTeamName,
-    config,
-    candidateLimit,
-  });
-
+  const payload = buildAiRerankPayload({ scoredPlayers, pairs, draftedPicks, myTeamName, config, candidateLimit, pairLimit });
   const effectiveProvider = typeof provider === 'function'
     ? provider
     : settings.endpoint
       ? (input) => endpointProvider(settings.endpoint, input, settings.timeoutMs ?? 10000)
       : null;
-
-  if (!effectiveProvider) {
-    return { status: 'unavailable', scoredPlayers, payload, decisions: [], summary: null };
-  }
+  if (!effectiveProvider) return { status: 'unavailable', scoredPlayers, payload, decisions: [], pairDecisions: [], summary: null };
 
   try {
     const response = await effectiveProvider(payload);
     const applied = applyAiRerank(scoredPlayers, response, candidateLimit);
-    return {
-      status: 'applied',
-      payload,
-      rawResponse: response,
-      ...applied,
-    };
+    const pairDecisions = applyAiPairRerank(pairs, response, pairLimit);
+    return { status: 'applied', payload, rawResponse: response, pairDecisions, ...applied };
   } catch (error) {
     return {
       status: 'error',
@@ -281,6 +295,7 @@ export async function rerankWithAi({
       scoredPlayers,
       payload,
       decisions: [],
+      pairDecisions: [],
       summary: null,
     };
   }
