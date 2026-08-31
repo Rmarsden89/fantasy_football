@@ -2,7 +2,7 @@ import http from 'node:http';
 
 const PORT = Number(process.env.RERANKER_PORT || 8787);
 const MODEL = process.env.OPENAI_RERANKER_MODEL || 'gpt-5.6-sol';
-const REASONING_EFFORT = process.env.OPENAI_RERANKER_REASONING || 'low';
+const REASONING_EFFORT = process.env.OPENAI_RERANKER_REASONING || 'none';
 const API_KEY = process.env.OPENAI_API_KEY;
 
 if (!API_KEY) {
@@ -23,13 +23,13 @@ const responseSchema = {
           // String keeps the strict schema simple. The browser normalizes IDs
           // with String(...) before matching them back to deterministic candidates.
           playerId: { type: 'string' },
-          reason: { type: 'string' },
+          reason: { type: 'string', maxLength: 120 },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
         },
         required: ['playerId', 'reason', 'confidence'],
       },
     },
-    summary: { type: 'string' },
+    summary: { type: 'string', maxLength: 180 },
   },
   required: ['rankings', 'summary'],
 };
@@ -63,14 +63,15 @@ function buildInstructions(payload) {
   };
 
   return [
-    'You are a fantasy-football draft reranker.',
+    'You are a fast fantasy-football draft reranker.',
+    'This is a small ranking decision, not a deep analysis task.',
     'You may ONLY reorder the supplied candidates. Never add a player outside candidates.',
     'Treat the deterministic engine as authoritative for eligibility and roster caps.',
     'Return every supplied candidate exactly once, in preferred order.',
     'Return playerId exactly as the string supplied for that candidate.',
     'Use the supplied league scoring, roster state, draft context, deterministic metrics, and policy rules.',
     'For close decisions, prioritize roster construction over tiny deterministic score differences.',
-    'Keep each reason concise and specific to the roster role being filled.',
+    'Give one short reason per player. Do not explain your reasoning process.',
     '',
     `Payload:\n${JSON.stringify(normalized)}`,
   ].join('\n');
@@ -98,8 +99,9 @@ async function callOpenAI(payload) {
       model: MODEL,
       reasoning: { effort: REASONING_EFFORT },
       input: buildInstructions(payload),
-      max_output_tokens: 1200,
+      max_output_tokens: 650,
       text: {
+        verbosity: 'low',
         format: {
           type: 'json_schema',
           name: 'fantasy_draft_rerank',
