@@ -14,16 +14,27 @@ const responseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    pairRankings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          pairId: { type: 'string' },
+          reason: { type: 'string', maxLength: 140 },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+        required: ['pairId', 'reason', 'confidence'],
+      },
+    },
     rankings: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          // String keeps the strict schema simple. The browser normalizes IDs
-          // with String(...) before matching them back to deterministic candidates.
           playerId: { type: 'string' },
-          reason: { type: 'string', maxLength: 120 },
+          reason: { type: 'string', maxLength: 100 },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
         },
         required: ['playerId', 'reason', 'confidence'],
@@ -31,7 +42,7 @@ const responseSchema = {
     },
     summary: { type: 'string', maxLength: 180 },
   },
-  required: ['rankings', 'summary'],
+  required: ['pairRankings', 'rankings', 'summary'],
 };
 
 function cors(res) {
@@ -56,22 +67,24 @@ async function readJson(req) {
 function buildInstructions(payload) {
   const normalized = {
     ...payload,
-    candidates: (payload.candidates || []).map((candidate) => ({
-      ...candidate,
-      playerId: String(candidate.playerId),
+    candidates: (payload.candidates || []).map((candidate) => ({ ...candidate, playerId: String(candidate.playerId) })),
+    turnPairs: (payload.turnPairs || []).map((pair) => ({
+      ...pair,
+      firstPlayerId: String(pair.firstPlayerId),
+      secondPlayerId: String(pair.secondPlayerId),
     })),
   };
 
   return [
-    'You are a fast fantasy-football draft reranker.',
+    'You are a fast fantasy-football snake-draft turn planner.',
     'This is a small ranking decision, not a deep analysis task.',
-    'You may ONLY reorder the supplied candidates. Never add a player outside candidates.',
+    'When turnPairs are supplied, they are the primary decision. Rank every supplied pair exactly once.',
+    'You may ONLY reorder supplied pairs and supplied candidates. Never invent a player or pair.',
     'Treat the deterministic engine as authoritative for eligibility and roster caps.',
-    'Return every supplied candidate exactly once, in preferred order.',
-    'Return playerId exactly as the string supplied for that candidate.',
-    'Use the supplied league scoring, roster state, draft context, deterministic metrics, and policy rules.',
-    'For close decisions, prioritize roster construction over tiny deterministic score differences.',
-    'Give one short reason per player. Do not explain your reasoning process.',
+    'Choose the best TWO-PICK plan for the roster, not merely the best first player.',
+    'Return pairId exactly as supplied. Return playerId exactly as supplied.',
+    'Also rank the supplied individual candidates as a supporting board.',
+    'Keep reasons short. The summary must name both recommended picks when turnPairs exist.',
     '',
     `Payload:\n${JSON.stringify(normalized)}`,
   ].join('\n');
@@ -91,35 +104,22 @@ async function callOpenAI(payload) {
   const startedAt = Date.now();
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${API_KEY}`,
-      'content-type': 'application/json',
-    },
+    headers: { authorization: `Bearer ${API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       model: MODEL,
       reasoning: { effort: REASONING_EFFORT },
       input: buildInstructions(payload),
-      max_output_tokens: 650,
+      max_output_tokens: 750,
       text: {
         verbosity: 'low',
-        format: {
-          type: 'json_schema',
-          name: 'fantasy_draft_rerank',
-          strict: true,
-          schema: responseSchema,
-        },
+        format: { type: 'json_schema', name: 'fantasy_draft_turn_plan', strict: true, schema: responseSchema },
       },
     }),
   });
 
   const raw = await response.text();
   let data = null;
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    data = null;
-  }
-
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = null; }
   if (!response.ok) {
     const message = data?.error?.message || raw || `OpenAI returned HTTP ${response.status}`;
     console.error(`OpenAI ${response.status} after ${Date.now() - startedAt}ms: ${message}`);
@@ -134,25 +134,18 @@ async function callOpenAI(payload) {
 
   const parsed = JSON.parse(text);
   console.log(
-    `Reranked ${payload.candidates.length} candidates with ${MODEL} in ${Date.now() - startedAt}ms` +
+    `Reranked ${(payload.turnPairs || []).length} turn pairs / ${payload.candidates.length} candidates with ${MODEL} in ${Date.now() - startedAt}ms` +
     (data?.usage ? ` (${data.usage.input_tokens ?? '?'} in / ${data.usage.output_tokens ?? '?'} out)` : ''),
   );
   return parsed;
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    cors(res);
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
+  if (req.method === 'OPTIONS') { cors(res); res.writeHead(204); res.end(); return; }
   if (req.method === 'GET' && req.url === '/health') {
     sendJson(res, 200, { ok: true, model: MODEL, reasoningEffort: REASONING_EFFORT });
     return;
   }
-
   if (req.method !== 'POST' || req.url !== '/rerank') {
     sendJson(res, 404, { error: 'Not found' });
     return;
