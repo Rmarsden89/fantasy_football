@@ -23,25 +23,44 @@ function rosterCounts(draftedPicks, myTeamName) {
   return counts;
 }
 
-function latestOverallPick(draftedPicks) {
-  let latest = 0;
+function latestDraftPick(draftedPicks) {
+  let latest = null;
   for (const pick of draftedPicks || []) {
     const overallPick = Number(pick?.overallPick);
-    if (Number.isFinite(overallPick) && overallPick > latest) latest = overallPick;
+    if (!Number.isFinite(overallPick)) continue;
+    if (!latest || overallPick > Number(latest.overallPick)) latest = pick;
   }
   return latest;
 }
 
+export function isSecondPickOfSnakeTurn({ scoredPlayers, draftedPicks, config }) {
+  if (String(config?.draftType || '').toUpperCase() !== 'SNAKE') return false;
+
+  const latest = latestDraftPick(draftedPicks);
+  if (!latest || latest.fantasyTeam !== config?.myTeamName) return false;
+
+  const nextPick = Number(scoredPlayers?.nextPick ?? scoredPlayers?.[0]?.nextPick);
+  const latestOverallPick = Number(latest.overallPick);
+  return Number.isFinite(nextPick)
+    && Number.isFinite(latestOverallPick)
+    && nextPick === latestOverallPick + 1;
+}
+
 export function shouldRunAiRerank({ scoredPlayers, draftedPicks, config }) {
   // The live AI layer is intentionally a snake-draft, on-the-clock feature.
-  // scoredPlayers.nextPick is our next scheduled selection; if it is exactly
-  // one after the latest completed overall pick, then we are currently up.
+  // Run once at the start of our turn. If our first pick is immediately followed
+  // by our second snake pick, keep the pair plan and do not spend another AI call.
   if (String(config?.draftType || '').toUpperCase() !== 'SNAKE') return false;
 
   const nextPick = Number(scoredPlayers?.nextPick ?? scoredPlayers?.[0]?.nextPick);
   if (!Number.isFinite(nextPick)) return false;
 
-  return nextPick === latestOverallPick(draftedPicks) + 1;
+  const latest = latestDraftPick(draftedPicks);
+  const latestOverallPick = Number(latest?.overallPick ?? 0);
+  const onClock = nextPick === latestOverallPick + 1;
+  if (!onClock) return false;
+
+  return !isSecondPickOfSnakeTurn({ scoredPlayers, draftedPicks, config });
 }
 
 function candidatePayload(player, deterministicRank) {
@@ -206,6 +225,16 @@ export async function rerankWithAi({
   const candidateLimit = settings.candidateLimit ?? 8;
   if (settings.enabled === false) {
     return { status: 'disabled', scoredPlayers, payload: null, decisions: [], summary: null };
+  }
+
+  if (isSecondPickOfSnakeTurn({ scoredPlayers, draftedPicks, config })) {
+    return {
+      status: 'skipped_pair_followup',
+      scoredPlayers,
+      payload: null,
+      decisions: [],
+      summary: null,
+    };
   }
 
   if (!shouldRunAiRerank({ scoredPlayers, draftedPicks, config })) {
