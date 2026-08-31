@@ -31,6 +31,13 @@ function onClockDraftedPicks() {
   ];
 }
 
+function secondPickOfTurnDraftedPicks() {
+  return [
+    ...onClockDraftedPicks(),
+    { playerId: 100, playerName: 'My Pick 56', position: 'RB', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 56 },
+  ];
+}
+
 test('AI payload contains only the deterministic candidate window and roster state', () => {
   const board = scoredBoard();
   const payload = buildAiRerankPayload({
@@ -75,6 +82,28 @@ test('AI reranker skips provider calls when it is not our pick', async () => {
     },
   });
   assert.equal(result.status, 'skipped_not_on_clock');
+  assert.equal(providerCalled, false);
+  assert.equal(result.payload, null);
+  assert.deepEqual(result.scoredPlayers.map((player) => player.id), [1, 2, 3]);
+});
+
+test('AI reranker skips the second consecutive pick of our snake turn', async () => {
+  const board = scoredBoard();
+  board.nextPick = 57;
+  board.followingPick = 72;
+  board.picksUntilFollowing = 14;
+  let providerCalled = false;
+  const result = await rerankWithAi({
+    scoredPlayers: board,
+    draftedPicks: secondPickOfTurnDraftedPicks(),
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    provider: async () => {
+      providerCalled = true;
+      return { rankings: [] };
+    },
+  });
+  assert.equal(result.status, 'skipped_pair_followup');
   assert.equal(providerCalled, false);
   assert.equal(result.payload, null);
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [1, 2, 3]);
