@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LEAGUE_CONFIG } from '../src/config.js';
-import { applyAiRerank, buildAiRerankPayload, rerankWithAi } from '../src/aiReranker.js';
+import { applyAiRerank, buildAiRerankPayload, deriveTurnPairFromAiRanking, rerankWithAi } from '../src/aiReranker.js';
 
 function scoredBoard() {
   const players = [
@@ -22,6 +22,7 @@ function turnPairs(board) {
   return [
     { first: board[0], second: board[1], secondScoreAfterFirst: 62, pairScore: 122, simulatedAfterFirst: true },
     { first: board[1], second: board[2], secondScoreAfterFirst: 61, pairScore: 120, simulatedAfterFirst: true },
+    { first: board[1], second: board[0], secondScoreAfterFirst: 58, pairScore: 117, simulatedAfterFirst: true },
   ];
 }
 
@@ -47,16 +48,8 @@ test('AI payload contains only the deterministic candidate window and roster sta
   assert.equal(payload.draftContext.rosterCounts.QB, 1);
   assert.equal(payload.draftContext.rosterCounts.RB, 2);
   assert.ok(payload.rules.some((rule) => rule.includes('QB1/QB2')));
-});
-
-test('AI payload includes deterministic snake turn plans', () => {
-  const board = scoredBoard();
-  const payload = buildAiRerankPayload({ scoredPlayers: board, pairs: turnPairs(board), draftedPicks, myTeamName: LEAGUE_CONFIG.myTeamName, config: LEAGUE_CONFIG });
-  assert.equal(payload.turnPairs.length, 2);
-  assert.equal(payload.turnPairs[0].pairId, 'pair-1');
-  assert.equal(payload.turnPairs[0].firstPlayerName, 'QB Starter');
-  assert.equal(payload.turnPairs[0].secondPlayerName, 'RB Upside');
-  assert.match(payload.task, /two-pick snake-turn plans/i);
+  assert.equal('turnPairs' in payload, false);
+  assert.match(payload.task, /application will build the two-pick/i);
 });
 
 test('AI response can reorder candidates but cannot introduce outside players', () => {
@@ -65,6 +58,15 @@ test('AI response can reorder candidates but cannot introduce outside players', 
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [2, 1, 3]);
   assert.equal(result.decisions.some((decision) => decision.playerId === 999), false);
   assert.equal(result.scoredPlayers.currentRound, 7);
+});
+
+test('turn pair is derived after AI chooses the first player', () => {
+  const board = scoredBoard();
+  const reranked = applyAiRerank(board, { rankings: [{ playerId: 2 }, { playerId: 1 }, { playerId: 3 }] }, 3);
+  const pair = deriveTurnPairFromAiRanking(reranked.scoredPlayers, turnPairs(board));
+  assert.equal(pair.first.name, 'RB Upside');
+  assert.equal(pair.second.name, 'WR Upside');
+  assert.equal(pair.pairScore, 120);
 });
 
 test('AI reranker skips provider calls when it is not our pick', async () => {
@@ -98,7 +100,7 @@ test('AI reranker falls back to deterministic order when provider errors', async
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [1, 2, 3]);
 });
 
-test('AI reranker applies a valid player and pair ranking', async () => {
+test('AI reranker ranks players first and then produces one sequential turn pair', async () => {
   const board = scoredBoard();
   const result = await rerankWithAi({
     scoredPlayers: board,
@@ -106,22 +108,22 @@ test('AI reranker applies a valid player and pair ranking', async () => {
     draftedPicks: onClockDraftedPicks(),
     myTeamName: LEAGUE_CONFIG.myTeamName,
     config: LEAGUE_CONFIG,
-    provider: async () => ({
-      pairRankings: [
-        { pairId: 'pair-2', reason: 'Best two-pick roster build', confidence: 0.88 },
-        { pairId: 'pair-1', reason: 'Strong fallback', confidence: 0.74 },
-      ],
-      rankings: [
-        { playerId: 2, reason: 'RB3 ceiling', confidence: 0.82 },
-        { playerId: 1, reason: 'QB2 floor', confidence: 0.75 },
-      ],
-      summary: 'Take RB Upside first and WR Upside second.',
-    }),
+    provider: async (payload) => {
+      assert.equal('turnPairs' in payload, false);
+      return {
+        rankings: [
+          { playerId: 2, reason: 'RB3 ceiling', confidence: 0.82 },
+          { playerId: 1, reason: 'QB2 floor', confidence: 0.75 },
+          { playerId: 3, reason: 'WR depth', confidence: 0.68 },
+        ],
+        summary: 'Prefer RB upside at the top of the board.',
+      };
+    },
   });
   assert.equal(result.status, 'applied');
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [2, 1, 3]);
   assert.equal(result.decisions[0].reason, 'RB3 ceiling');
-  assert.equal(result.pairDecisions[0].firstPlayerName, 'RB Upside');
-  assert.equal(result.pairDecisions[0].secondPlayerName, 'WR Upside');
-  assert.equal(result.pairDecisions[0].deterministicPairRank, 2);
+  assert.equal(result.recommendedPair.first.name, 'RB Upside');
+  assert.equal(result.recommendedPair.second.name, 'WR Upside');
+  assert.match(result.summary, /Recommended turn: RB Upside \+ WR Upside/);
 });
