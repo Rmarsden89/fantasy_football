@@ -275,7 +275,10 @@ export async function rerankWithAi({ scoredPlayers, pairs = [], draftedPicks, my
     return { status: 'skipped_not_on_clock', scoredPlayers, payload: null, decisions: [], pairDecisions: [], summary: null };
   }
 
-  const payload = buildAiRerankPayload({ scoredPlayers, pairs, draftedPicks, myTeamName, config, candidateLimit, pairLimit });
+  const livePairs = pairs.length
+    ? pairs
+    : (typeof window !== 'undefined' ? window.__fantasyDraftHelper?.state?.pairs || [] : []);
+  const payload = buildAiRerankPayload({ scoredPlayers, pairs: livePairs, draftedPicks, myTeamName, config, candidateLimit, pairLimit });
   const effectiveProvider = typeof provider === 'function'
     ? provider
     : settings.endpoint
@@ -286,7 +289,7 @@ export async function rerankWithAi({ scoredPlayers, pairs = [], draftedPicks, my
   try {
     const response = await effectiveProvider(payload);
     const applied = applyAiRerank(scoredPlayers, response, candidateLimit);
-    const pairDecisions = applyAiPairRerank(pairs, response, pairLimit);
+    const pairDecisions = applyAiPairRerank(livePairs, response, pairLimit);
     return { status: 'applied', payload, rawResponse: response, pairDecisions, ...applied };
   } catch (error) {
     return {
