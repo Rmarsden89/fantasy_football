@@ -18,6 +18,13 @@ function scoredBoard() {
   return players;
 }
 
+function turnPairs(board) {
+  return [
+    { first: board[0], second: board[1], secondScoreAfterFirst: 62, pairScore: 122, simulatedAfterFirst: true },
+    { first: board[1], second: board[2], secondScoreAfterFirst: 61, pairScore: 120, simulatedAfterFirst: true },
+  ];
+}
+
 const draftedPicks = [
   { playerId: 10, playerName: 'My QB1', position: 'QB', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 8 },
   { playerId: 11, playerName: 'My RB1', position: 'RB', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 9 },
@@ -25,28 +32,16 @@ const draftedPicks = [
 ];
 
 function onClockDraftedPicks() {
-  return [
-    ...draftedPicks,
-    { playerId: 99, playerName: 'Opponent Pick 55', position: 'WR', fantasyTeam: 'Opponent', overallPick: 55 },
-  ];
+  return [...draftedPicks, { playerId: 99, playerName: 'Opponent Pick 55', position: 'WR', fantasyTeam: 'Opponent', overallPick: 55 }];
 }
 
 function secondPickOfTurnDraftedPicks() {
-  return [
-    ...onClockDraftedPicks(),
-    { playerId: 100, playerName: 'My Pick 56', position: 'RB', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 56 },
-  ];
+  return [...onClockDraftedPicks(), { playerId: 100, playerName: 'My Pick 56', position: 'RB', fantasyTeam: LEAGUE_CONFIG.myTeamName, overallPick: 56 }];
 }
 
 test('AI payload contains only the deterministic candidate window and roster state', () => {
   const board = scoredBoard();
-  const payload = buildAiRerankPayload({
-    scoredPlayers: board,
-    draftedPicks,
-    myTeamName: LEAGUE_CONFIG.myTeamName,
-    config: LEAGUE_CONFIG,
-    candidateLimit: 2,
-  });
+  const payload = buildAiRerankPayload({ scoredPlayers: board, draftedPicks, myTeamName: LEAGUE_CONFIG.myTeamName, config: LEAGUE_CONFIG, candidateLimit: 2 });
   assert.equal(payload.candidates.length, 2);
   assert.deepEqual(payload.candidates.map((candidate) => candidate.playerId), [1, 2]);
   assert.equal(payload.draftContext.rosterCounts.QB, 1);
@@ -54,15 +49,19 @@ test('AI payload contains only the deterministic candidate window and roster sta
   assert.ok(payload.rules.some((rule) => rule.includes('QB1/QB2')));
 });
 
+test('AI payload includes deterministic snake turn plans', () => {
+  const board = scoredBoard();
+  const payload = buildAiRerankPayload({ scoredPlayers: board, pairs: turnPairs(board), draftedPicks, myTeamName: LEAGUE_CONFIG.myTeamName, config: LEAGUE_CONFIG });
+  assert.equal(payload.turnPairs.length, 2);
+  assert.equal(payload.turnPairs[0].pairId, 'pair-1');
+  assert.equal(payload.turnPairs[0].firstPlayerName, 'QB Starter');
+  assert.equal(payload.turnPairs[0].secondPlayerName, 'RB Upside');
+  assert.match(payload.task, /two-pick snake-turn plans/i);
+});
+
 test('AI response can reorder candidates but cannot introduce outside players', () => {
   const board = scoredBoard();
-  const result = applyAiRerank(board, {
-    rankings: [
-      { playerId: 999, reason: 'not allowed' },
-      { playerId: 2, reason: 'RB3 upside' },
-      { playerId: 1, reason: 'QB2 stability' },
-    ],
-  }, 2);
+  const result = applyAiRerank(board, { rankings: [{ playerId: 999, reason: 'not allowed' }, { playerId: 2, reason: 'RB3 upside' }, { playerId: 1, reason: 'QB2 stability' }] }, 2);
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [2, 1, 3]);
   assert.equal(result.decisions.some((decision) => decision.playerId === 999), false);
   assert.equal(result.scoredPlayers.currentRound, 7);
@@ -71,16 +70,7 @@ test('AI response can reorder candidates but cannot introduce outside players', 
 test('AI reranker skips provider calls when it is not our pick', async () => {
   const board = scoredBoard();
   let providerCalled = false;
-  const result = await rerankWithAi({
-    scoredPlayers: board,
-    draftedPicks,
-    myTeamName: LEAGUE_CONFIG.myTeamName,
-    config: LEAGUE_CONFIG,
-    provider: async () => {
-      providerCalled = true;
-      return { rankings: [] };
-    },
-  });
+  const result = await rerankWithAi({ scoredPlayers: board, draftedPicks, myTeamName: LEAGUE_CONFIG.myTeamName, config: LEAGUE_CONFIG, provider: async () => { providerCalled = true; return { rankings: [] }; } });
   assert.equal(result.status, 'skipped_not_on_clock');
   assert.equal(providerCalled, false);
   assert.equal(result.payload, null);
@@ -93,16 +83,7 @@ test('AI reranker skips the second consecutive pick of our snake turn', async ()
   board.followingPick = 72;
   board.picksUntilFollowing = 14;
   let providerCalled = false;
-  const result = await rerankWithAi({
-    scoredPlayers: board,
-    draftedPicks: secondPickOfTurnDraftedPicks(),
-    myTeamName: LEAGUE_CONFIG.myTeamName,
-    config: LEAGUE_CONFIG,
-    provider: async () => {
-      providerCalled = true;
-      return { rankings: [] };
-    },
-  });
+  const result = await rerankWithAi({ scoredPlayers: board, draftedPicks: secondPickOfTurnDraftedPicks(), myTeamName: LEAGUE_CONFIG.myTeamName, config: LEAGUE_CONFIG, provider: async () => { providerCalled = true; return { rankings: [] }; } });
   assert.equal(result.status, 'skipped_pair_followup');
   assert.equal(providerCalled, false);
   assert.equal(result.payload, null);
@@ -111,34 +92,36 @@ test('AI reranker skips the second consecutive pick of our snake turn', async ()
 
 test('AI reranker falls back to deterministic order when provider errors', async () => {
   const board = scoredBoard();
-  const result = await rerankWithAi({
-    scoredPlayers: board,
-    draftedPicks: onClockDraftedPicks(),
-    myTeamName: LEAGUE_CONFIG.myTeamName,
-    config: LEAGUE_CONFIG,
-    provider: async () => { throw new Error('offline'); },
-  });
+  const result = await rerankWithAi({ scoredPlayers: board, pairs: turnPairs(board), draftedPicks: onClockDraftedPicks(), myTeamName: LEAGUE_CONFIG.myTeamName, config: LEAGUE_CONFIG, provider: async () => { throw new Error('offline'); } });
   assert.equal(result.status, 'error');
   assert.equal(result.error, 'offline');
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [1, 2, 3]);
 });
 
-test('AI reranker applies a valid provider ranking', async () => {
+test('AI reranker applies a valid player and pair ranking', async () => {
   const board = scoredBoard();
   const result = await rerankWithAi({
     scoredPlayers: board,
+    pairs: turnPairs(board),
     draftedPicks: onClockDraftedPicks(),
     myTeamName: LEAGUE_CONFIG.myTeamName,
     config: LEAGUE_CONFIG,
     provider: async () => ({
+      pairRankings: [
+        { pairId: 'pair-2', reason: 'Best two-pick roster build', confidence: 0.88 },
+        { pairId: 'pair-1', reason: 'Strong fallback', confidence: 0.74 },
+      ],
       rankings: [
         { playerId: 2, reason: 'RB3 ceiling', confidence: 0.82 },
         { playerId: 1, reason: 'QB2 floor', confidence: 0.75 },
       ],
-      summary: 'Prefer the RB upside in this roster state.',
+      summary: 'Take RB Upside first and WR Upside second.',
     }),
   });
   assert.equal(result.status, 'applied');
   assert.deepEqual(result.scoredPlayers.map((player) => player.id), [2, 1, 3]);
   assert.equal(result.decisions[0].reason, 'RB3 ceiling');
+  assert.equal(result.pairDecisions[0].firstPlayerName, 'RB Upside');
+  assert.equal(result.pairDecisions[0].secondPlayerName, 'WR Upside');
+  assert.equal(result.pairDecisions[0].deterministicPairRank, 2);
 });
