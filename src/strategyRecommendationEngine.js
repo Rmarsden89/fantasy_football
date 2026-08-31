@@ -6,8 +6,14 @@ import {
   scoreAvailablePlayers as baseScoreAvailablePlayers,
 } from './recommendationEngine.js';
 
+const TEAM_DIVERSITY_POSITIONS = new Set(['RB', 'WR', 'TE']);
+
 function normalizePosition(position) {
   return position === 'D/ST' ? 'DST' : position;
+}
+
+function normalizeNflTeam(team) {
+  return typeof team === 'string' ? team.trim().toUpperCase() : '';
 }
 
 function rosterCounts(draftedPicks, myTeamName) {
@@ -18,6 +24,25 @@ function rosterCounts(draftedPicks, myTeamName) {
       counts[position] = (counts[position] || 0) + 1;
       return counts;
     }, {});
+}
+
+function occupiedSkillPositionTeams(draftedPicks, myTeamName) {
+  const occupied = new Set();
+  for (const pick of draftedPicks || []) {
+    if (pick.fantasyTeam !== myTeamName) continue;
+    const position = normalizePosition(pick.position);
+    const nflTeam = normalizeNflTeam(pick.nflTeam);
+    if (!TEAM_DIVERSITY_POSITIONS.has(position) || !nflTeam) continue;
+    occupied.add(`${position}|${nflTeam}`);
+  }
+  return occupied;
+}
+
+function violatesSkillPositionTeamDiversity(player, occupied) {
+  const position = normalizePosition(player.position);
+  const nflTeam = normalizeNflTeam(player.nflTeam);
+  if (!TEAM_DIVERSITY_POSITIONS.has(position) || !nflTeam) return false;
+  return occupied.has(`${position}|${nflTeam}`);
 }
 
 function depthUpsideMultiplier(position, have, config) {
@@ -57,7 +82,12 @@ export function scoreAvailablePlayers(args) {
   const scored = baseScoreAvailablePlayers(args);
   const { draftedPicks, myTeamName, config } = args;
   const counts = rosterCounts(draftedPicks, myTeamName);
+  const occupied = occupiedSkillPositionTeams(draftedPicks, myTeamName);
   const upsideWeight = Number(scored.phaseWeights?.upside || 0);
+
+  for (let index = scored.length - 1; index >= 0; index -= 1) {
+    if (violatesSkillPositionTeamDiversity(scored[index], occupied)) scored.splice(index, 1);
+  }
 
   for (const player of scored) {
     const position = normalizePosition(player.position);
