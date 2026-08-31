@@ -14,19 +14,6 @@ const responseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    pairRankings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          pairId: { type: 'string' },
-          reason: { type: 'string', maxLength: 140 },
-          confidence: { type: 'number', minimum: 0, maximum: 1 },
-        },
-        required: ['pairId', 'reason', 'confidence'],
-      },
-    },
     rankings: {
       type: 'array',
       items: {
@@ -40,9 +27,9 @@ const responseSchema = {
         required: ['playerId', 'reason', 'confidence'],
       },
     },
-    summary: { type: 'string', maxLength: 180 },
+    summary: { type: 'string', maxLength: 160 },
   },
-  required: ['pairRankings', 'rankings', 'summary'],
+  required: ['rankings', 'summary'],
 };
 
 function cors(res) {
@@ -67,24 +54,23 @@ async function readJson(req) {
 function buildInstructions(payload) {
   const normalized = {
     ...payload,
-    candidates: (payload.candidates || []).map((candidate) => ({ ...candidate, playerId: String(candidate.playerId) })),
-    turnPairs: (payload.turnPairs || []).map((pair) => ({
-      ...pair,
-      firstPlayerId: String(pair.firstPlayerId),
-      secondPlayerId: String(pair.secondPlayerId),
+    candidates: (payload.candidates || []).map((candidate) => ({
+      ...candidate,
+      playerId: String(candidate.playerId),
     })),
   };
 
   return [
-    'You are a fast fantasy-football snake-draft turn planner.',
+    'You are a fast fantasy-football draft reranker.',
     'This is a small ranking decision, not a deep analysis task.',
-    'When turnPairs are supplied, they are the primary decision. Rank every supplied pair exactly once.',
-    'You may ONLY reorder supplied pairs and supplied candidates. Never invent a player or pair.',
+    'Rank the supplied PLAYERS only. Do not choose or rank turn pairs.',
+    'You may ONLY reorder the supplied candidates. Never invent a player.',
     'Treat the deterministic engine as authoritative for eligibility and roster caps.',
-    'Choose the best TWO-PICK plan for the roster, not merely the best first player.',
-    'Return pairId exactly as supplied. Return playerId exactly as supplied.',
-    'Also rank the supplied individual candidates as a supporting board.',
-    'Keep reasons short. The summary must name both recommended picks when turnPairs exist.',
+    'Use league scoring, roster construction, current draft state, consensus, value, and upside to reorder the board.',
+    'For close decisions, prioritize roster construction over tiny deterministic score differences.',
+    'Return every supplied candidate exactly once and return playerId exactly as supplied.',
+    'Keep each reason short. Do not explain your reasoning process.',
+    'The application will build the two-pick snake-turn pair after your player ranking.',
     '',
     `Payload:\n${JSON.stringify(normalized)}`,
   ].join('\n');
@@ -109,10 +95,10 @@ async function callOpenAI(payload) {
       model: MODEL,
       reasoning: { effort: REASONING_EFFORT },
       input: buildInstructions(payload),
-      max_output_tokens: 750,
+      max_output_tokens: 650,
       text: {
         verbosity: 'low',
-        format: { type: 'json_schema', name: 'fantasy_draft_turn_plan', strict: true, schema: responseSchema },
+        format: { type: 'json_schema', name: 'fantasy_draft_rerank', strict: true, schema: responseSchema },
       },
     }),
   });
@@ -134,7 +120,7 @@ async function callOpenAI(payload) {
 
   const parsed = JSON.parse(text);
   console.log(
-    `Reranked ${(payload.turnPairs || []).length} turn pairs / ${payload.candidates.length} candidates with ${MODEL} in ${Date.now() - startedAt}ms` +
+    `Reranked ${payload.candidates.length} candidates with ${MODEL} in ${Date.now() - startedAt}ms` +
     (data?.usage ? ` (${data.usage.input_tokens ?? '?'} in / ${data.usage.output_tokens ?? '?'} out)` : ''),
   );
   return parsed;
