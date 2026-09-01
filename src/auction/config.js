@@ -52,6 +52,14 @@ export const AUCTION_LEAGUE_CONFIG = {
       FLEX: 0.85,
       BENCH: 0.35,
     },
+    market: {
+      // When live room demand suggests the player should clear below intrinsic
+      // value, allow a small buffer above the modeled clearing point without
+      // bidding all the way back to full value.
+      clearingBufferPct: 0.05,
+      minimumClearingBuffer: 2,
+      maximumClearingBuffer: 5,
+    },
   },
   scoring: {
     passing: {
