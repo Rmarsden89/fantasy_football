@@ -2,39 +2,29 @@ function normalizeText(value = '') {
   return String(value).replace(/\s+/g, ' ').trim();
 }
 
-function parseDollar(value = '') {
-  const match = String(value).match(/\$(\d{1,3})\b/);
-  return match ? Number(match[1]) : null;
-}
-
 export function parseNomineeCardText(text = '') {
   const cleaned = normalizeText(text);
   if (!/CURRENT OFFER:\s*\$\d+/i.test(cleaned) || !/PRE-DRAFT VAL:\s*\$\d+/i.test(cleaned)) return null;
 
-  const playerMatch = cleaned.match(/^(.+?)\s+([A-Z]{2,3})\s+(QB|RB|WR|TE|K|D\/ST|DST)\b/i);
-  if (!playerMatch) return null;
+  // ESPN sometimes collapses the player/team/position text together in the
+  // rendered DOM (for example: "Jonathan TaylorINDRB 2025 STATS..."). Anchor
+  // parsing to the start of the stats section so live bid-history text cannot
+  // become part of the player identity.
+  const headingMatch = cleaned.match(/^(.+?)([A-Z]{2,3})(QB|RB|WR|TE|K|D\/ST|DST)\s+2025 STATS:/i);
+  if (!headingMatch) return null;
 
   const currentOfferMatch = cleaned.match(/CURRENT OFFER:\s*\$(\d{1,3})/i);
   const marketValueMatch = cleaned.match(/PRE-DRAFT VAL:\s*\$(\d{1,3})/i);
 
   return {
-    playerName: playerMatch[1].trim(),
-    nflTeam: playerMatch[2].toUpperCase(),
-    position: playerMatch[3].toUpperCase().replace('D/ST', 'DST'),
+    playerName: headingMatch[1].trim(),
+    nflTeam: headingMatch[2].toUpperCase(),
+    position: headingMatch[3].toUpperCase().replace('D/ST', 'DST'),
     currentBid: currentOfferMatch ? Number(currentOfferMatch[1]) : null,
     marketValue: marketValueMatch ? Number(marketValueMatch[1]) : null,
     marketValueSource: 'espn-practice',
     rawText: cleaned,
   };
-}
-
-export function nominationIdentity(nomination) {
-  if (!nomination?.playerName) return null;
-  return [
-    nomination.playerName.trim().toLowerCase(),
-    nomination.nflTeam ?? '',
-    nomination.position ?? '',
-  ].join('|');
 }
 
 function nomineeCandidates() {
@@ -54,6 +44,11 @@ function nomineeCandidates() {
     .sort((a, b) => a.text.length - b.text.length);
 }
 
+export function nominationIdentity(nomination) {
+  if (!nomination?.playerName) return null;
+  return `${nomination.playerName}|${nomination.nflTeam ?? ''}|${nomination.position ?? ''}`.toLowerCase();
+}
+
 export function detectCurrentNomination() {
   for (const { text } of nomineeCandidates()) {
     const nomination = parseNomineeCardText(text);
@@ -64,18 +59,15 @@ export function detectCurrentNomination() {
 
 export function createNominationWatcher({ onNomination = null, intervalMs = 500 } = {}) {
   let timer = null;
-  let lastNominationKey = null;
+  let lastKey = null;
 
   function scan() {
     const nomination = detectCurrentNomination();
     if (!nomination) return null;
 
-    // A changing current offer is still the same nomination. The recommendation
-    // is calculated once when the player first appears and remains fixed for that
-    // nomination so live bidding does not spam or move the recommended ceiling.
     const key = nominationIdentity(nomination);
-    if (key && key !== lastNominationKey) {
-      lastNominationKey = key;
+    if (key && key !== lastKey) {
+      lastKey = key;
       onNomination?.(nomination);
     }
     return nomination;
@@ -83,6 +75,7 @@ export function createNominationWatcher({ onNomination = null, intervalMs = 500 
 
   function start() {
     stop();
+    lastKey = null;
     const initial = scan();
     timer = setInterval(scan, intervalMs);
     return initial;
