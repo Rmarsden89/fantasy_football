@@ -12,6 +12,12 @@ function parseDollarAfterLabel(text, label) {
   return match ? Number(match[1]) : null;
 }
 
+function parseProjectedPoints(text = '') {
+  const cleaned = normalizeText(text);
+  const match = cleaned.match(/2026 PROJECTED:.*?([0-9]+(?:\.[0-9]+)?)\s+PTS\b/i);
+  return match ? Number(match[1]) : null;
+}
+
 export function parseNomineeCardText(text = '') {
   const cleaned = normalizeText(text);
   if (!/CURRENT OFFER:\s*\$\d+/i.test(cleaned) || !/PRE-DRAFT VAL:\s*\$\d+/i.test(cleaned)) return null;
@@ -36,6 +42,7 @@ export function parseNomineeCardText(text = '') {
     position: normalizePosition(headingMatch[3]),
     currentBid: parseDollarAfterLabel(cleaned, 'CURRENT OFFER:'),
     marketValue: parseDollarAfterLabel(cleaned, 'PRE-DRAFT VAL:'),
+    projectedPoints: parseProjectedPoints(cleaned),
     marketValueSource: 'espn-practice',
     rawText: cleaned,
   };
@@ -71,6 +78,7 @@ function detectFromPlayerSelectedDom() {
     position,
     currentBid,
     marketValue,
+    projectedPoints: parseProjectedPoints(rawText),
     marketValueSource: 'espn-practice',
     rawText,
   };
