@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseNomineeCardText } from '../src/auction/nominationWatcher.js';
+import { nominationIdentity, parseNomineeCardText } from '../src/auction/nominationWatcher.js';
 
 test('parses the ESPN salary-cap nominee card with current offer and pre-draft value', () => {
   const nominee = parseNomineeCardText(
@@ -20,4 +20,20 @@ test('does not mistake the player filter panel for a nominee card', () => {
     parseNomineeCardText('2026 Projected 2025 Season All Pos. QB RB WR TE FLEX DP D/ST K All NFL Teams'),
     null,
   );
+});
+
+test('nomination identity stays stable when the live bid changes', () => {
+  const first = {
+    playerName: 'Derrick Henry',
+    nflTeam: 'BAL',
+    position: 'RB',
+    currentBid: 1,
+    marketValue: 77,
+  };
+  const later = {
+    ...first,
+    currentBid: 84,
+  };
+
+  assert.equal(nominationIdentity(first), nominationIdentity(later));
 });
