@@ -1,8 +1,10 @@
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
 import { createEspnAuctionWatcher } from './espnAuctionWatcher.js';
+import { createNominationWatcher } from './nominationWatcher.js';
+import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.1.0-auction-practice';
+const HELPER_VERSION = '0.2.0-auction-recommendations';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -47,10 +49,43 @@ export function buildAuctionState(sales = [], config = AUCTION_LEAGUE_CONFIG) {
   return [...teams.values()].sort((a, b) => b.remainingBudget - a.remainingBudget);
 }
 
+function myPurchases(sales, config) {
+  return sales.filter((sale) => sale?.fantasyTeam === config.myTeamName);
+}
+
+function printRecommendation(recommendation) {
+  if (!recommendation) return;
+  const label = recommendation.action === 'BUY'
+    ? '✅ BUY'
+    : recommendation.action === 'PASS'
+      ? '⛔ PASS'
+      : '👀 WATCH';
+
+  console.group(`${label}: ${recommendation.playerName} (${recommendation.position ?? '?'})`);
+  console.table([{
+    player: recommendation.playerName,
+    position: recommendation.position,
+    currentBid: recommendation.currentBid,
+    buyAtOrBelow: recommendation.buyAtOrBelow,
+    marketValue: recommendation.marketValue,
+    marketSource: recommendation.marketValueSource,
+    remainingBudget: recommendation.remainingBudget,
+    maxLegalBid: recommendation.maximumLegalBid,
+    fillReserveAfterWin: recommendation.minimumFillReserve,
+    rosterSpotsLeft: recommendation.spotsLeft,
+  }]);
+  console.log(`Recommendation: ${label} at $${recommendation.buyAtOrBelow} or below.`);
+  console.groupEnd();
+}
+
 function printState(sales, config = AUCTION_LEAGUE_CONFIG) {
   const teams = buildAuctionState(sales, config);
+  const budget = buildMyBudgetState({ purchases: myPurchases(sales, config), config });
   console.group(`Fantasy Auction Helper ${HELPER_VERSION}`);
   console.log(`${sales.length} completed salary-cap sales detected.`);
+  console.log(
+    `${config.myTeamName}: $${budget.remainingBudget} remaining, ${budget.spotsLeft} roster spots left, max legal bid $${budget.maximumLegalBid}.`,
+  );
 
   if (sales.length) {
     console.log('Recent sales');
@@ -80,28 +115,107 @@ function printState(sales, config = AUCTION_LEAGUE_CONFIG) {
   }
 
   console.groupEnd();
-  return { sales: [...sales], teams };
+  return { sales: [...sales], teams, myBudget: budget };
+}
+
+function downloadJson(filename, value) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = {}) {
-  let latest = { sales: [], teams: [] };
+  let latest = { sales: [], teams: [], myBudget: buildMyBudgetState({ config }) };
+  let latestNomination = null;
+  let latestRecommendation = null;
+  const sessionLog = [];
+
+  function logEvent(type, payload) {
+    sessionLog.push({
+      timestamp: new Date().toISOString(),
+      type,
+      payload,
+    });
+  }
+
+  function refreshRecommendation(nomination, sales) {
+    if (!nomination) return null;
+    latestNomination = nomination;
+    latestRecommendation = recommendBid({
+      nomination,
+      purchases: myPurchases(sales, config),
+      config,
+    });
+    logEvent('recommendation', latestRecommendation);
+    printRecommendation(latestRecommendation);
+    return latestRecommendation;
+  }
+
   const watcher = createEspnAuctionWatcher({
-    onSale: (_sale, sales) => {
+    onSale: (sale, sales) => {
       latest = printState(sales, config);
+      logEvent('sale', sale);
+      if (latestNomination) refreshRecommendation(latestNomination, sales);
+    },
+  });
+
+  const nominationWatcher = createNominationWatcher({
+    onNomination: (nomination) => {
+      logEvent('nomination', nomination);
+      refreshRecommendation(nomination, watcher.getSales());
     },
   });
 
   const initialSales = watcher.start();
   latest = printState(initialSales, config);
+  const initialNomination = nominationWatcher.start();
+  if (initialNomination) refreshRecommendation(initialNomination, initialSales);
+  logEvent('session-start', {
+    version: HELPER_VERSION,
+    config,
+    myBudget: latest.myBudget,
+  });
 
-  return {
+  const session = {
     version: HELPER_VERSION,
     config,
     watcher,
+    nominationWatcher,
     getState: () => latest,
+    getNomination: () => latestNomination,
+    getRecommendation: () => latestRecommendation,
+    getLogs: () => [...sessionLog],
     printState: () => printState(watcher.getSales(), config),
-    stop: () => watcher.stop(),
+    exportLogs: () => {
+      const snapshot = {
+        exportedAt: new Date().toISOString(),
+        version: HELPER_VERSION,
+        config,
+        sales: watcher.getSales(),
+        state: printState(watcher.getSales(), config),
+        nomination: latestNomination,
+        recommendation: latestRecommendation,
+        events: [...sessionLog],
+      };
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      downloadJson(`fantasy-auction-${stamp}.json`, snapshot);
+      return snapshot;
+    },
+    stop: () => {
+      watcher.stop();
+      nominationWatcher.stop();
+      logEvent('session-stop', {});
+    },
   };
+
+  if (typeof window !== 'undefined') window.FantasyAuctionSession = session;
+  return session;
 }
 
 if (typeof window !== 'undefined') {
@@ -109,6 +223,8 @@ if (typeof window !== 'undefined') {
     version: HELPER_VERSION,
     config: AUCTION_LEAGUE_CONFIG,
     buildAuctionState,
+    buildMyBudgetState,
+    recommendBid,
     start: startAuctionPracticeHelper,
   };
 
