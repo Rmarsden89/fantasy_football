@@ -7,7 +7,7 @@ function parseDollar(value = '') {
   return match ? Number(match[1]) : null;
 }
 
-function parseNomineeCardText(text = '') {
+export function parseNomineeCardText(text = '') {
   const cleaned = normalizeText(text);
   if (!/CURRENT OFFER:\s*\$\d+/i.test(cleaned) || !/PRE-DRAFT VAL:\s*\$\d+/i.test(cleaned)) return null;
 
