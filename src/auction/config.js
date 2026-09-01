@@ -32,6 +32,27 @@ export const AUCTION_LEAGUE_CONFIG = {
     DST: 2,
     K: 2,
   },
+  auctionStrategy: {
+    // These are deterministic budget-reservation targets, not player values.
+    // The helper protects money for still-empty starting roles before allowing
+    // us to spend aggressively on FLEX or bench depth.
+    starterReserve: {
+      QB: [32],
+      RB: [28],
+      WR: [28, 18],
+      TE: [18],
+      DP: [2],
+      DST: [1],
+      K: [1],
+    },
+    flexReserve: 18,
+    flexPositions: ['RB', 'WR', 'TE'],
+    roleValueMultiplier: {
+      STARTER: 1,
+      FLEX: 0.85,
+      BENCH: 0.35,
+    },
+  },
   scoring: {
     passing: {
       yards: 0.04,
