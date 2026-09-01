@@ -4,7 +4,7 @@ import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.3.1-fixed-nomination-recommendation';
+const HELPER_VERSION = '0.3.2-structured-nomination';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
