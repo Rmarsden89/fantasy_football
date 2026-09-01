@@ -7,10 +7,13 @@ export function parseNomineeCardText(text = '') {
   if (!/CURRENT OFFER:\s*\$\d+/i.test(cleaned) || !/PRE-DRAFT VAL:\s*\$\d+/i.test(cleaned)) return null;
 
   // ESPN sometimes collapses the player/team/position text together in the
-  // rendered DOM (for example: "Jonathan TaylorINDRB 2025 STATS..."). Anchor
-  // parsing to the start of the stats section so live bid-history text cannot
-  // become part of the player identity.
-  const headingMatch = cleaned.match(/^(.+?)([A-Z]{2,3})(QB|RB|WR|TE|K|D\/ST|DST)\s+2025 STATS:/i);
+  // rendered DOM (for example: "Jonathan TaylorINDRB 2025 STATS..."). In
+  // other renders it keeps spaces ("Derrick Henry BAL RB 2025 STATS...").
+  // Anchor parsing to the stats heading and allow either shape so live bid
+  // history can never become part of the player identity.
+  const headingMatch = cleaned.match(
+    /^(.+?)\s*([A-Z]{2,3})\s*(QB|RB|WR|TE|K|D\/ST|DST)\s+2025 STATS:/,
+  );
   if (!headingMatch) return null;
 
   const currentOfferMatch = cleaned.match(/CURRENT OFFER:\s*\$(\d{1,3})/i);
