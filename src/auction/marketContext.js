@@ -1,4 +1,4 @@
-import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
+import { AUCTION_LEAGUE_CONFIG } from './config.js';
 import { getMaximumBid } from './marketMath.js';
 
 function positionCounts(players = []) {
@@ -181,8 +181,15 @@ export function marketPressureFactor({ demand, supply } = {}) {
     return Number(Math.min(1.02, Math.max(0.72, 0.72 + 0.34 * competitionScore)).toFixed(3));
   }
 
-  const competitionScore = effectiveDemand / (effectiveDemand + 4);
-  return Number(Math.min(1, Math.max(0.72, 0.72 + 0.3 * competitionScore)).toFixed(3));
+  // Before the player pool has loaded, do not discount a player while the room
+  // still has broad demand. Demand-only discounts begin once the number of
+  // meaningful bidders has materially collapsed.
+  if (effectiveDemand >= 8) return 1;
+  if (effectiveDemand >= 5) return 0.96;
+  if (effectiveDemand >= 3) return 0.9;
+  if (effectiveDemand >= 1.5) return 0.82;
+  if (effectiveDemand > 0) return 0.76;
+  return 0.72;
 }
 
 export function buildMarketContext({
