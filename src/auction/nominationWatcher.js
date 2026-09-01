@@ -28,6 +28,15 @@ export function parseNomineeCardText(text = '') {
   };
 }
 
+export function nominationIdentity(nomination) {
+  if (!nomination?.playerName) return null;
+  return [
+    nomination.playerName.trim().toLowerCase(),
+    nomination.nflTeam ?? '',
+    nomination.position ?? '',
+  ].join('|');
+}
+
 function nomineeCandidates() {
   const selectors = [
     '[class*="auction"]',
@@ -55,14 +64,18 @@ export function detectCurrentNomination() {
 
 export function createNominationWatcher({ onNomination = null, intervalMs = 500 } = {}) {
   let timer = null;
-  let lastKey = null;
+  let lastNominationKey = null;
 
   function scan() {
     const nomination = detectCurrentNomination();
     if (!nomination) return null;
-    const key = `${nomination.playerName}:${nomination.currentBid ?? ''}:${nomination.marketValue ?? ''}`;
-    if (key !== lastKey) {
-      lastKey = key;
+
+    // A changing current offer is still the same nomination. The recommendation
+    // is calculated once when the player first appears and remains fixed for that
+    // nomination so live bidding does not spam or move the recommended ceiling.
+    const key = nominationIdentity(nomination);
+    if (key && key !== lastNominationKey) {
+      lastNominationKey = key;
       onNomination?.(nomination);
     }
     return nomination;
