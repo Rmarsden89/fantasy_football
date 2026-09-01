@@ -4,7 +4,7 @@ import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.3.0-roster-aware-auction';
+const HELPER_VERSION = '0.3.1-fixed-nomination-recommendation';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -68,7 +68,7 @@ function printRecommendation(recommendation) {
     rosterRole: recommendation.role,
     haveAtPosition: recommendation.positionHave,
     positionLimit: recommendation.positionLimit,
-    currentBid: recommendation.currentBid,
+    bidWhenNominated: recommendation.currentBid,
     espnValue: recommendation.marketValue,
     roleAdjustedValue: recommendation.roleAdjustedMarketValue,
     buyAtOrBelow: recommendation.buyAtOrBelow,
@@ -87,8 +87,9 @@ function printRecommendation(recommendation) {
         : 'position is already full';
 
   console.log(
-    `${recommendation.playerName}: ${label} at $${recommendation.buyAtOrBelow} or below — ${roleText}; `
-    + `$${recommendation.strategicReserveAfterWin} remains protected for the rest of the roster after the win.`,
+    `${recommendation.playerName}: recommended ceiling is $${recommendation.buyAtOrBelow} — ${roleText}; `
+    + `$${recommendation.strategicReserveAfterWin} remains protected for the rest of the roster after the win. `
+    + 'This ceiling is fixed for the nomination and will not move with live bids.',
   );
   console.groupEnd();
 }
@@ -159,7 +160,7 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     });
   }
 
-  function refreshRecommendation(nomination, sales) {
+  function createRecommendation(nomination, sales) {
     if (!nomination) return null;
     latestNomination = nomination;
     latestRecommendation = recommendBid({
@@ -176,21 +177,21 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     onSale: (sale, sales) => {
       latest = printState(sales, config);
       logEvent('sale', sale);
-      if (latestNomination) refreshRecommendation(latestNomination, sales);
+      // Deliberately do not recalculate the just-completed nomination here.
+      // The next recommendation is created only when ESPN shows a new nominee.
     },
   });
 
   const nominationWatcher = createNominationWatcher({
     onNomination: (nomination) => {
       logEvent('nomination', nomination);
-      refreshRecommendation(nomination, watcher.getSales());
+      createRecommendation(nomination, watcher.getSales());
     },
   });
 
   const initialSales = watcher.start();
   latest = printState(initialSales, config);
-  const initialNomination = nominationWatcher.start();
-  if (initialNomination) refreshRecommendation(initialNomination, initialSales);
+  nominationWatcher.start();
   logEvent('session-start', {
     version: HELPER_VERSION,
     config,
