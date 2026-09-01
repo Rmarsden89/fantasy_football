@@ -143,6 +143,7 @@ export function buildRemainingSupply({
     if (soldIds.has(Number(player.id))) return false;
     if (soldNames.has(normalizeName(player.name))) return false;
     if (keeperNames.has(normalizeName(player.name))) return false;
+    if (Number(player.raw?.onTeamId) > 0) return false;
     if (normalizeName(player.name) === nomineeName) return false;
     return Number.isFinite(Number(player.projectedPoints));
   });
