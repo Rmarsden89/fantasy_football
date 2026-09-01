@@ -7,109 +7,49 @@ function parseDollar(value = '') {
   return match ? Number(match[1]) : null;
 }
 
-function parseDollarValues(value = '') {
-  return [...String(value).matchAll(/\$(\d{1,3})\b/g)]
-    .map((match) => Number(match[1]))
-    .filter(Number.isFinite);
-}
-
-function findPlayerRowMarketValue(playerName) {
-  if (!playerName) return null;
-  const candidates = [...document.querySelectorAll('tr, [class*="player"], [class*="Table__TR"]')];
-  const target = playerName.toLowerCase();
-
-  for (const el of candidates) {
-    const text = normalizeText(el.innerText || el.textContent || '');
-    if (!text || !text.toLowerCase().includes(target)) continue;
-
-    // Prefer table/list rows that begin with ESPN's displayed auction value.
-    const leadingPrice = text.match(/^\$(\d{1,3})\b/);
-    if (leadingPrice) return Number(leadingPrice[1]);
-  }
-
-  for (const el of candidates) {
-    const text = normalizeText(el.innerText || el.textContent || '');
-    if (!text || !text.toLowerCase().includes(target)) continue;
-    const price = parseDollar(text);
-    if (Number.isFinite(price)) return price;
-  }
-  return null;
-}
-
-export function parseNomineeFromText(text = '') {
+function parseNomineeCardText(text = '') {
   const cleaned = normalizeText(text);
-  const match = cleaned.match(/^(.+?)\s+([A-Z]{2,3})\s+(QB|RB|WR|TE|K|D\/ST|DST)\b/i);
-  if (!match) return null;
+  if (!/CURRENT OFFER:\s*\$\d+/i.test(cleaned) || !/PRE-DRAFT VAL:\s*\$\d+/i.test(cleaned)) return null;
+
+  const playerMatch = cleaned.match(/^(.+?)\s+([A-Z]{2,3})\s+(QB|RB|WR|TE|K|D\/ST|DST)\b/i);
+  if (!playerMatch) return null;
+
+  const currentOfferMatch = cleaned.match(/CURRENT OFFER:\s*\$(\d{1,3})/i);
+  const marketValueMatch = cleaned.match(/PRE-DRAFT VAL:\s*\$(\d{1,3})/i);
+
   return {
-    playerName: match[1].trim(),
-    nflTeam: match[2].toUpperCase(),
-    position: match[3].toUpperCase().replace('D/ST', 'DST'),
+    playerName: playerMatch[1].trim(),
+    nflTeam: playerMatch[2].toUpperCase(),
+    position: playerMatch[3].toUpperCase().replace('D/ST', 'DST'),
+    currentBid: currentOfferMatch ? Number(currentOfferMatch[1]) : null,
+    marketValue: marketValueMatch ? Number(marketValueMatch[1]) : null,
+    marketValueSource: 'espn-practice',
+    rawText: cleaned,
   };
 }
 
-function nominationCandidates() {
-  const preferredSelectors = [
-    '[class*="nominee"]',
-    '[class*="player-card"]',
-    '[class*="draftPlayer"]',
+function nomineeCandidates() {
+  const selectors = [
     '[class*="auction"]',
+    '[class*="offer"]',
+    '[class*="draft"]',
+    '[class*="player"]',
+    'section',
+    'div',
   ];
-  const preferred = preferredSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
+  const elements = [...new Set(selectors.flatMap((selector) => [...document.querySelectorAll(selector)]))];
 
-  // ESPN's salary-cap draft card does not currently expose one of the obvious
-  // class names above, so fall back to compact visible containers that contain
-  // the stat labels shown on the active nominee card.
-  const fallback = [...document.querySelectorAll('div, section, article')]
-    .filter((el) => {
-      const text = normalizeText(el.innerText || el.textContent || '');
-      return text.length >= 15
-        && text.length <= 1200
-        && /2026 PROJECTED|2025 STATS|PREV/i.test(text);
-    })
-    .sort((a, b) => {
-      const aLength = normalizeText(a.innerText || a.textContent || '').length;
-      const bLength = normalizeText(b.innerText || b.textContent || '').length;
-      return aLength - bLength;
-    });
-
-  return [...new Set([...preferred, ...fallback])];
-}
-
-function findCurrentBidFromCard(cardText = '') {
-  const values = parseDollarValues(cardText);
-  return values.length ? Math.min(...values) : null;
-}
-
-function findCurrentBidFromDocument(playerName) {
-  const candidates = [...document.querySelectorAll('[class*="bid"], [class*="auction"], [class*="nominee"], [class*="draft"]')];
-  const values = [];
-  for (const el of candidates) {
-    const text = normalizeText(el.innerText || el.textContent || '');
-    if (!text || (playerName && !text.toLowerCase().includes(playerName.toLowerCase()))) continue;
-    values.push(...parseDollarValues(text));
-  }
-  return values.length ? Math.min(...values) : null;
+  return elements
+    .map((el) => ({ el, text: normalizeText(el.innerText || el.textContent || '') }))
+    .filter(({ text }) => /CURRENT OFFER:\s*\$\d+/i.test(text) && /PRE-DRAFT VAL:\s*\$\d+/i.test(text))
+    .sort((a, b) => a.text.length - b.text.length);
 }
 
 export function detectCurrentNomination() {
-  for (const el of nominationCandidates()) {
-    const text = normalizeText(el.innerText || el.textContent || '');
-    if (!text || !/2026 PROJECTED|2025 STATS|PREV/i.test(text)) continue;
-    const player = parseNomineeFromText(text);
-    if (!player) continue;
-
-    const cardBid = findCurrentBidFromCard(text);
-    const documentBid = findCurrentBidFromDocument(player.playerName);
-
-    return {
-      ...player,
-      currentBid: Number.isFinite(cardBid) ? cardBid : documentBid,
-      marketValue: findPlayerRowMarketValue(player.playerName),
-      marketValueSource: 'espn-practice',
-      rawText: text,
-    };
+  for (const { text } of nomineeCandidates()) {
+    const nomination = parseNomineeCardText(text);
+    if (nomination) return nomination;
   }
-
   return null;
 }
 
