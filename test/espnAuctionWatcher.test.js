@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseAuctionEventElement } from '../src/auction/espnAuctionWatcher.js';
+import {
+  canonicalSaleKey,
+  parseAuctionEventElement,
+} from '../src/auction/espnAuctionWatcher.js';
 
 function fakeElement(text, playerId = 12345) {
   return {
@@ -28,4 +31,21 @@ test('parses a salary-cap sale message with player, price, and team', () => {
 
 test('ignores non-auction messages', () => {
   assert.equal(parseAuctionEventElement(fakeElement('Bijan Robinson / ATL RB nominated')), null);
+});
+
+test('sale dedupe key ignores player id differences between duplicate DOM copies', () => {
+  const withId = {
+    playerName: 'Puka Nacua',
+    playerId: 4426515,
+    price: 114,
+    fantasyTeam: 'PUKA Pac',
+  };
+  const withoutId = {
+    playerName: 'Puka Nacua',
+    playerId: null,
+    price: 114,
+    fantasyTeam: 'PUKA Pac',
+  };
+
+  assert.equal(canonicalSaleKey(withId), canonicalSaleKey(withoutId));
 });
