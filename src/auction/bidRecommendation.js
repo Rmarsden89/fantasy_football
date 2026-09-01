@@ -1,4 +1,5 @@
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
+import { buildMarketContext } from './marketContext.js';
 import { getMaximumBid } from './marketMath.js';
 
 function positionCounts(players = []) {
@@ -54,7 +55,12 @@ function reserveTargetForMissingStarters(counts, config) {
 
     const targets = reserveConfig[position] ?? [];
     for (let index = 0; index < missing; index += 1) {
-      const target = Number(targets[index] ?? config.minimumBid);
+      // Reserve tiers correspond to starter slots. If WR1 is already filled,
+      // the remaining WR reserve should use WR2's target rather than restarting
+      // at the WR1 target.
+      const targetIndex = have + index;
+      const fallback = targets.length ? targets[targets.length - 1] : config.minimumBid;
+      const target = Number(targets[targetIndex] ?? fallback ?? config.minimumBid);
       premiumReserve += Math.max(0, target - config.minimumBid);
     }
   }
@@ -64,6 +70,14 @@ function reserveTargetForMissingStarters(counts, config) {
   }
 
   return premiumReserve;
+}
+
+function clearingBuffer(value, config) {
+  const strategy = config.auctionStrategy?.market ?? {};
+  const pct = Number(strategy.clearingBufferPct ?? 0.05);
+  const minBuffer = Number(strategy.minimumClearingBuffer ?? 2);
+  const maxBuffer = Number(strategy.maximumClearingBuffer ?? 5);
+  return Math.max(minBuffer, Math.min(maxBuffer, Math.ceil(value * pct)));
 }
 
 export function buildMyBudgetState({
@@ -97,6 +111,8 @@ export function buildMyBudgetState({
 export function recommendBid({
   nomination,
   purchases = [],
+  sales = [],
+  playerPool = [],
   config = AUCTION_LEAGUE_CONFIG,
 } = {}) {
   if (!nomination?.playerName) return null;
@@ -131,6 +147,18 @@ export function recommendBid({
     ? Math.floor(marketValue * Math.max(0, roleMultiplier))
     : null;
 
+  const marketContext = buildMarketContext({ nomination, sales, playerPool, config });
+  const pressureFactor = Number(marketContext?.pressureFactor ?? 1);
+  const expectedClearingValue = hasMarketValue
+    ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * pressureFactor))
+    : null;
+  const marketAwareValue = hasMarketValue
+    ? Math.min(
+        roleAdjustedMarketValue,
+        expectedClearingValue + clearingBuffer(expectedClearingValue, config),
+      )
+    : strategicMaximumBid;
+
   const buyAtOrBelow = atPositionLimit
     ? 0
     : Math.max(
@@ -138,7 +166,7 @@ export function recommendBid({
         Math.min(
           budget.maximumLegalBid,
           strategicMaximumBid,
-          hasMarketValue ? roleAdjustedMarketValue : strategicMaximumBid,
+          marketAwareValue,
         ),
       );
 
@@ -156,10 +184,16 @@ export function recommendBid({
     currentBid: hasCurrentBid ? currentBid : null,
     marketValue: hasMarketValue ? marketValue : null,
     marketValueSource: nomination.marketValueSource ?? (hasMarketValue ? 'espn-practice' : null),
+    projectedPoints: Number.isFinite(Number(nomination.projectedPoints)) ? Number(nomination.projectedPoints) : null,
     role,
     positionHave: position ? (currentCounts[position] ?? 0) : null,
     positionLimit: Number.isFinite(positionLimit) ? positionLimit : null,
     roleAdjustedMarketValue,
+    expectedClearingValue,
+    marketPressureFactor: pressureFactor,
+    marketAwareValue,
+    opponentDemand: marketContext?.demand ?? null,
+    remainingSupply: marketContext?.supply ?? null,
     buyAtOrBelow,
     action,
     remainingBudget: budget.remainingBudget,
