@@ -58,6 +58,14 @@ export function parseAuctionEventElement(el) {
   };
 }
 
+export function canonicalSaleKey(sale) {
+  return [
+    normalizeText(sale?.playerName || '').toLowerCase(),
+    Number(sale?.price),
+    normalizeText(sale?.fantasyTeam || '').toLowerCase(),
+  ].join('|');
+}
+
 export function createEspnAuctionWatcher({ onSale = null } = {}) {
   const seen = new Set();
   const sales = [];
@@ -80,7 +88,10 @@ export function createEspnAuctionWatcher({ onSale = null } = {}) {
       const sale = parseAuctionEventElement(el);
       if (!sale) continue;
 
-      const key = `${sale.playerId ?? sale.playerName}:${sale.price}:${sale.fantasyTeam ?? ''}`;
+      // ESPN currently renders the same completed sale twice: one copy includes
+      // the headshot/player id and another text-only copy does not. Deduplicate
+      // by the sale facts rather than playerId so both DOM variants collapse.
+      const key = canonicalSaleKey(sale);
       if (seen.has(key)) continue;
       seen.add(key);
 
