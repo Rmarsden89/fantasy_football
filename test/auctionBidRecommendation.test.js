@@ -48,7 +48,7 @@ test('a third RB is treated as bench depth and heavily capped', () => {
       playerName: 'Jeremiyah Love',
       position: 'RB',
       marketValue: 66,
-      currentBid: 20,
+      currentBid: 10,
     },
     purchases: [
       { playerName: 'Ashton Jeanty', position: 'RB', price: 50, fantasyTeam: 'Uncle RICO' },
@@ -57,7 +57,7 @@ test('a third RB is treated as bench depth and heavily capped', () => {
   });
 
   assert.equal(recommendation.role, 'BENCH');
-  assert.ok(recommendation.buyAtOrBelow < 25);
+  assert.equal(recommendation.buyAtOrBelow, 15);
   assert.equal(recommendation.action, 'BUY');
 });
 
