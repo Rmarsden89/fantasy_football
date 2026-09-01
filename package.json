@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/index.js --bundle --format=iife --global-name=FantasyDraftHelper --outfile=dist/draft-helper.js",
+    "build:auction": "esbuild src/auction/index.js --bundle --format=iife --global-name=FantasyAuctionHelperBundle --outfile=dist/auction-helper.js",
     "test": "node --test",
     "reranker": "node scripts/reranker-server.mjs",
     "rankings:refresh": "node scripts/refresh-rankings.mjs",
