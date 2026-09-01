@@ -1,10 +1,11 @@
+import { fetchEspnPlayerPool } from '../espnPlayerPool.js';
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
 import { createEspnAuctionWatcher } from './espnAuctionWatcher.js';
 import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.3.2-structured-nomination';
+const HELPER_VERSION = '0.4.0-market-aware-auction';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -71,11 +72,17 @@ function printRecommendation(recommendation) {
     bidWhenNominated: recommendation.currentBid,
     espnValue: recommendation.marketValue,
     roleAdjustedValue: recommendation.roleAdjustedMarketValue,
+    expectedClearing: recommendation.expectedClearingValue,
+    marketPressure: recommendation.marketPressureFactor,
     buyAtOrBelow: recommendation.buyAtOrBelow,
     strategicMax: recommendation.strategicMaximumBid,
     remainingBudget: recommendation.remainingBudget,
     reserveAfterWin: recommendation.strategicReserveAfterWin,
     maxLegalBid: recommendation.maximumLegalBid,
+    capableOpponents: recommendation.opponentDemand?.capableBidderCount ?? null,
+    effectiveDemand: recommendation.opponentDemand?.effectiveDemand ?? null,
+    comparableLeft: recommendation.remainingSupply?.comparableCount ?? null,
+    nearPeersLeft: recommendation.remainingSupply?.nearPeerCount ?? null,
   }]);
 
   const roleText = recommendation.role === 'STARTER'
@@ -86,9 +93,14 @@ function printRecommendation(recommendation) {
         ? 'would be depth/bench'
         : 'position is already full';
 
+  const marketText = recommendation.remainingSupply
+    ? `${recommendation.opponentDemand?.capableBidderCount ?? 0} capable opponents and `
+      + `${recommendation.remainingSupply.comparableCount} comparable ${recommendation.position}s remain`
+    : `${recommendation.opponentDemand?.capableBidderCount ?? 0} capable opponents; player-pool supply unavailable`;
+
   console.log(
     `${recommendation.playerName}: recommended ceiling is $${recommendation.buyAtOrBelow} — ${roleText}; `
-    + `$${recommendation.strategicReserveAfterWin} remains protected for the rest of the roster after the win. `
+    + `${marketText}. $${recommendation.strategicReserveAfterWin} remains protected for the rest of the roster after the win. `
     + 'This ceiling is fixed for the nomination and will not move with live bids.',
   );
   console.groupEnd();
@@ -150,6 +162,8 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
   let latest = { sales: [], teams: [], myBudget: buildMyBudgetState({ config }) };
   let latestNomination = null;
   let latestRecommendation = null;
+  let playerPool = [];
+  let playerPoolStatus = 'loading';
   const sessionLog = [];
 
   function logEvent(type, payload) {
@@ -166,6 +180,8 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     latestRecommendation = recommendBid({
       nomination,
       purchases: myPurchases(sales, config),
+      sales,
+      playerPool,
       config,
     });
     logEvent('recommendation', latestRecommendation);
@@ -192,6 +208,20 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
   const initialSales = watcher.start();
   latest = printState(initialSales, config);
   nominationWatcher.start();
+
+  fetchEspnPlayerPool({ leagueId: config.leagueId, season: config.season })
+    .then((pool) => {
+      playerPool = pool;
+      playerPoolStatus = 'loaded';
+      logEvent('player-pool-loaded', { count: pool.length });
+      console.log(`Auction player pool loaded: ${pool.length} players available for supply analysis.`);
+    })
+    .catch((error) => {
+      playerPoolStatus = 'error';
+      logEvent('player-pool-error', { message: String(error?.message ?? error) });
+      console.warn('Auction player pool could not be loaded; recommendations will use opponent demand without supply.', error);
+    });
+
   logEvent('session-start', {
     version: HELPER_VERSION,
     config,
@@ -207,6 +237,7 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     getNomination: () => latestNomination,
     getRecommendation: () => latestRecommendation,
     getLogs: () => [...sessionLog],
+    getPlayerPoolStatus: () => ({ status: playerPoolStatus, count: playerPool.length }),
     printState: () => printState(watcher.getSales(), config),
     exportLogs: () => {
       const snapshot = {
@@ -215,6 +246,7 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
         config,
         sales: watcher.getSales(),
         state: printState(watcher.getSales(), config),
+        playerPoolStatus: { status: playerPoolStatus, count: playerPool.length },
         nomination: latestNomination,
         recommendation: latestRecommendation,
         events: [...sessionLog],
