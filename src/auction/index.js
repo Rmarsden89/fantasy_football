@@ -4,7 +4,7 @@ import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.2.0-auction-recommendations';
+const HELPER_VERSION = '0.3.0-roster-aware-auction';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -61,20 +61,35 @@ function printRecommendation(recommendation) {
       ? '⛔ PASS'
       : '👀 WATCH';
 
-  console.group(`${label}: ${recommendation.playerName} (${recommendation.position ?? '?'})`);
+  console.group(`${label}: ${recommendation.playerName} — ${recommendation.position ?? '?'} / ${recommendation.role}`);
   console.table([{
     player: recommendation.playerName,
     position: recommendation.position,
+    rosterRole: recommendation.role,
+    haveAtPosition: recommendation.positionHave,
+    positionLimit: recommendation.positionLimit,
     currentBid: recommendation.currentBid,
+    espnValue: recommendation.marketValue,
+    roleAdjustedValue: recommendation.roleAdjustedMarketValue,
     buyAtOrBelow: recommendation.buyAtOrBelow,
-    marketValue: recommendation.marketValue,
-    marketSource: recommendation.marketValueSource,
+    strategicMax: recommendation.strategicMaximumBid,
     remainingBudget: recommendation.remainingBudget,
+    reserveAfterWin: recommendation.strategicReserveAfterWin,
     maxLegalBid: recommendation.maximumLegalBid,
-    fillReserveAfterWin: recommendation.minimumFillReserve,
-    rosterSpotsLeft: recommendation.spotsLeft,
   }]);
-  console.log(`Recommendation: ${label} at $${recommendation.buyAtOrBelow} or below.`);
+
+  const roleText = recommendation.role === 'STARTER'
+    ? 'fills an open starter'
+    : recommendation.role === 'FLEX'
+      ? 'would fill FLEX'
+      : recommendation.role === 'BENCH'
+        ? 'would be depth/bench'
+        : 'position is already full';
+
+  console.log(
+    `${recommendation.playerName}: ${label} at $${recommendation.buyAtOrBelow} or below — ${roleText}; `
+    + `$${recommendation.strategicReserveAfterWin} remains protected for the rest of the roster after the win.`,
+  );
   console.groupEnd();
 }
 
