@@ -7,7 +7,11 @@ import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.6.0-practice-autobid';
+const HELPER_VERSION = '0.7.0-dynamic-strategy-signals';
+
+function normalizeName(value = '') {
+  return String(value).trim().toLowerCase();
+}
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -72,7 +76,9 @@ function printRecommendation(recommendation) {
     cheatTier: recommendation.cheatSheetTier,
     targetRole: recommendation.cheatSheetTargetRole,
     preference: recommendation.cheatSheetPreferenceMultiplier,
-    cheatCap: recommendation.cheatSheetMaximumBid,
+    tierUrgency: recommendation.tierScarcitySignal?.urgency ?? null,
+    keeperFlier: recommendation.keeperSignal?.eligible ?? false,
+    backupCap: recommendation.backupRoleCap,
     bidWhenNominated: recommendation.currentBid,
     espnValue: recommendation.marketValue,
     roleAdjustedValue: recommendation.roleAdjustedMarketValue,
@@ -105,11 +111,11 @@ function printRecommendation(recommendation) {
 
   console.log(
     `${recommendation.playerName}: recommended ceiling is $${recommendation.buyAtOrBelow} — ${roleText}; `
-    + `${recommendation.cheatSheetTier} target. ${marketText}. `
-    + `$${recommendation.strategicReserveAfterWin} remains protected after a win. `
+    + `${recommendation.cheatSheetTier} pre-draft preference, ${recommendation.tierScarcitySignal?.urgency ?? 'NONE'} tier urgency. `
+    + `${marketText}. $${recommendation.strategicReserveAfterWin} remains protected after a win. `
     + 'This ceiling is fixed for the nomination and will not move with live bids.',
   );
-  if (recommendation.cheatSheetReason) console.log(`Cheat sheet: ${recommendation.cheatSheetReason}`);
+  if (recommendation.cheatSheetReason) console.log(`Strategy signals: ${recommendation.cheatSheetReason}`);
   console.groupEnd();
 }
 
@@ -184,11 +190,24 @@ export function startAuctionPracticeHelper({
     });
   }
 
+  function enrichNomination(nomination) {
+    if (!nomination || !playerPool.length) return nomination;
+    const player = playerPool.find((candidate) => normalizeName(candidate?.name) === normalizeName(nomination.playerName));
+    if (!player) return nomination;
+    return {
+      ...nomination,
+      projectedPoints: nomination.projectedPoints ?? player.projectedPoints ?? null,
+      experienceYears: player.experienceYears ?? null,
+      playerPoolId: player.id ?? null,
+    };
+  }
+
   function createRecommendation(nomination, sales) {
     if (!nomination) return null;
-    latestNomination = nomination;
+    const enrichedNomination = enrichNomination(nomination);
+    latestNomination = enrichedNomination;
     latestRecommendation = recommendBid({
-      nomination,
+      nomination: enrichedNomination,
       purchases: myPurchases(sales, config),
       sales,
       playerPool,
@@ -242,12 +261,12 @@ export function startAuctionPracticeHelper({
       playerPool = pool;
       playerPoolStatus = 'loaded';
       logEvent('player-pool-loaded', { count: pool.length });
-      console.log(`Auction player pool loaded: ${pool.length} players available for supply analysis.`);
+      console.log(`Auction player pool loaded: ${pool.length} players available for supply and keeper-flier analysis.`);
     })
     .catch((error) => {
       playerPoolStatus = 'error';
       logEvent('player-pool-error', { message: String(error?.message ?? error) });
-      console.warn('Auction player pool could not be loaded; recommendations will use opponent demand without supply.', error);
+      console.warn('Auction player pool could not be loaded; recommendations will use opponent demand without supply/rookie enrichment.', error);
     });
 
   logEvent('session-start', {
