@@ -1,5 +1,5 @@
 export const AUCTION_CHEAT_SHEET = {
-  version: '2026-09-02-v3-dynamic-signals',
+  version: '2026-09-02-v4-dynamic-goal-reserve',
   goals: {
     primary: 'Acquire an elite RB1 without sacrificing roster balance',
     secondary: ['Add a quality WR2', 'Add a starting QB at a sensible price'],
@@ -26,8 +26,6 @@ export const AUCTION_CHEAT_SHEET = {
     'Derrick Henry': { position: 'RB', tier: 'IDEAL', targetRole: 'RB1', eliteRb: true },
     'Ashton Jeanty': { position: 'RB', tier: 'IDEAL', targetRole: 'RB1', eliteRb: true },
 
-    // 2026 rookie; expensive at normal market price, but especially attractive
-    // if the room ever lets him fall into cheap keeper-flier territory.
     'Jeremiyah Love': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX', keeperUpside: 'HIGH' },
     'Kenneth Walker III': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX' },
     'Breece Hall': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX' },
@@ -209,6 +207,38 @@ function keeperSignal({ player, marketValue, experienceYears, config }) {
   };
 }
 
+function primaryGoalSignal({ player, state, config }) {
+  if (state.eliteRbSecured || player?.eliteRb) {
+    return { open: false, targetReserve: 0, additionalReserve: 0, reason: state.eliteRbSecured ? 'elite RB goal already filled' : 'winning this player fills the elite RB goal' };
+  }
+
+  const rbBoard = state.board.RB;
+  const stretchRemaining = rbBoard.byTier.STRETCH?.remaining ?? 0;
+  const idealRemaining = rbBoard.byTier.IDEAL?.remaining ?? 0;
+  const fallbackRemaining = rbBoard.byTier.FALLBACK?.remaining ?? 0;
+
+  let targetReserve = 0;
+  let reason = 'no rated RB1 targets remain';
+  if (stretchRemaining > 0) {
+    targetReserve = 85;
+    reason = `${stretchRemaining} stretch RB1 targets remain`;
+  } else if (idealRemaining > 0) {
+    targetReserve = 70;
+    reason = `${idealRemaining} ideal RB1 targets remain`;
+  } else if (fallbackRemaining > 0) {
+    targetReserve = 50;
+    reason = `${fallbackRemaining} fallback RB1 targets remain`;
+  }
+
+  const normalRbReserve = Number(config?.auctionStrategy?.starterReserve?.RB?.[0] ?? config?.minimumBid ?? 1);
+  return {
+    open: targetReserve > 0,
+    targetReserve,
+    additionalReserve: Math.max(0, targetReserve - normalRbReserve),
+    reason,
+  };
+}
+
 export function buildCheatSheetContext({
   playerName,
   position,
@@ -224,6 +254,7 @@ export function buildCheatSheetContext({
   const rosterFit = rosterFitSignal({ position, state });
   const scarcity = scarcitySignal({ player, position, state });
   const keeper = keeperSignal({ player, marketValue, experienceYears, config });
+  const primaryGoal = primaryGoalSignal({ player, state, config });
 
   let preferenceMultiplier = Number(AUCTION_CHEAT_SHEET.tierMultipliers[player?.tier] ?? 1);
   const reasons = [player ? `${player.tier} pre-draft preference` : 'unrated pre-draft player'];
@@ -236,6 +267,8 @@ export function buildCheatSheetContext({
 
   preferenceMultiplier *= keeper.multiplier;
   if (keeper.reason) reasons.push(keeper.reason);
+
+  if (primaryGoal.open) reasons.push(`protect $${primaryGoal.targetReserve} total for primary RB1 goal while ${primaryGoal.reason}`);
 
   if (state.budgetMode === 'PROTECT' && preferenceMultiplier > 1.02) {
     preferenceMultiplier = 1.02;
@@ -252,6 +285,7 @@ export function buildCheatSheetContext({
     rosterFit,
     scarcity,
     keeper,
+    primaryGoal,
     reason: reasons.join('; '),
   };
 }
