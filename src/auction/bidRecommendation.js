@@ -135,10 +135,7 @@ export function recommendBid({
   const spotsAfterWin = Math.max(0, budget.spotsLeft - (atPositionLimit ? 0 : 1));
   const baseReserveAfterWin = spotsAfterWin * config.minimumBid;
   const starterPremiumReserveAfterWin = reserveTargetForMissingStarters(countsAfterWin, config);
-  const strategicReserveAfterWin = baseReserveAfterWin + starterPremiumReserveAfterWin;
-  const strategicMaximumBid = atPositionLimit
-    ? 0
-    : Math.max(0, budget.remainingBudget - strategicReserveAfterWin);
+  const baseStrategicReserveAfterWin = baseReserveAfterWin + starterPremiumReserveAfterWin;
 
   const roleMultiplier = Number(config.auctionStrategy?.roleValueMultiplier?.[role] ?? 1);
   const roleAdjustedMarketValue = hasMarketValue
@@ -155,6 +152,13 @@ export function recommendBid({
     experienceYears: nomination.experienceYears ?? null,
     config,
   });
+
+  const primaryGoalAdditionalReserve = Number(cheatSheetContext?.primaryGoal?.additionalReserve ?? 0);
+  const strategicReserveAfterWin = baseStrategicReserveAfterWin + Math.max(0, primaryGoalAdditionalReserve);
+  const strategicMaximumBid = atPositionLimit
+    ? 0
+    : Math.max(0, budget.remainingBudget - strategicReserveAfterWin);
+
   const preferenceMultiplier = Number(cheatSheetContext?.preferenceMultiplier ?? 1);
   let intrinsicPreferredValue = hasMarketValue
     ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * preferenceMultiplier))
@@ -230,6 +234,7 @@ export function recommendBid({
     rosterFitSignal: cheatSheetContext?.rosterFit ?? null,
     tierScarcitySignal: cheatSheetContext?.scarcity ?? null,
     keeperSignal: cheatSheetContext?.keeper ?? null,
+    primaryGoalSignal: cheatSheetContext?.primaryGoal ?? null,
     backupRoleCap: hasBackupRoleCap ? backupRoleCap : null,
     intrinsicPreferredValue,
     expectedClearingValue,
@@ -243,6 +248,8 @@ export function recommendBid({
     maximumLegalBid: budget.maximumLegalBid,
     strategicMaximumBid,
     strategicReserveAfterWin,
+    baseStrategicReserveAfterWin,
+    primaryGoalAdditionalReserve: Math.max(0, primaryGoalAdditionalReserve),
     minimumFillReserve: budget.minimumFillReserve,
     spotsLeft: budget.spotsLeft,
   };
