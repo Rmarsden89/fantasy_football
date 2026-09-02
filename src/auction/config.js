@@ -9,8 +9,8 @@ export const AUCTION_LEAGUE_CONFIG = {
   keeperCount: 2,
   minimumBid: 1,
   myKeepers: [
-    { playerName: 'Bijan Robinson', position: 'RB', price: 80 },
-    { playerName: 'Brock Bowers', position: 'TE', price: 18 },
+    { playerName: 'Brock Bowers', position: 'TE', price: 28 },
+    { playerName: 'Chris Olave', position: 'WR', price: 25 },
   ],
   roster: {
     QB: 1,
@@ -33,9 +33,6 @@ export const AUCTION_LEAGUE_CONFIG = {
     K: 2,
   },
   auctionStrategy: {
-    // These are deterministic budget-reservation targets, not player values.
-    // The helper protects money for still-empty starting roles before allowing
-    // us to spend aggressively on FLEX or bench depth.
     starterReserve: {
       QB: [32],
       RB: [28],
@@ -53,9 +50,6 @@ export const AUCTION_LEAGUE_CONFIG = {
       BENCH: 0.35,
     },
     market: {
-      // When live room demand suggests the player should clear below intrinsic
-      // value, allow a small buffer above the modeled clearing point without
-      // bidding all the way back to full value.
       clearingBufferPct: 0.05,
       minimumClearingBuffer: 2,
       maximumClearingBuffer: 5,
