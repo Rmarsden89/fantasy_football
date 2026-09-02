@@ -28,6 +28,17 @@ function draftRank(player) {
   return preferred?.rank ?? preferred?.auctionValue ?? null;
 }
 
+function experienceYears(player) {
+  const candidates = [
+    player.experience?.years,
+    player.experienceYears,
+    player.yearsPro,
+    typeof player.experience === 'number' ? player.experience : null,
+  ];
+  const value = candidates.map(Number).find(Number.isFinite);
+  return Number.isFinite(value) ? value : null;
+}
+
 export function normalizeEspnPlayer(entry, season = 2026) {
   const player = entry.player || entry;
   const position = POSITION_BY_DEFAULT_ID[player.defaultPositionId] || null;
@@ -44,6 +55,7 @@ export function normalizeEspnPlayer(entry, season = 2026) {
     percentOwned: player.ownership?.percentOwned ?? null,
     averageDraftPosition: player.ownership?.averageDraftPosition ?? null,
     auctionValueAverage: player.ownership?.auctionValueAverage ?? null,
+    experienceYears: experienceYears(player),
     injuryStatus: player.injuryStatus ?? null,
     seasonOutlook: player.seasonOutlook ?? '',
     lastNewsDate: player.lastNewsDate ?? null,
