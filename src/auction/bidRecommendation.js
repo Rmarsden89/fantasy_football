@@ -1,4 +1,5 @@
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
+import { buildCheatSheetContext } from './cheatSheet.js';
 import { buildMarketContext } from './marketContext.js';
 import { getMaximumBid } from './marketMath.js';
 
@@ -55,9 +56,6 @@ function reserveTargetForMissingStarters(counts, config) {
 
     const targets = reserveConfig[position] ?? [];
     for (let index = 0; index < missing; index += 1) {
-      // Reserve tiers correspond to starter slots. If WR1 is already filled,
-      // the remaining WR reserve should use WR2's target rather than restarting
-      // at the WR1 target.
       const targetIndex = have + index;
       const fallback = targets.length ? targets[targets.length - 1] : config.minimumBid;
       const target = Number(targets[targetIndex] ?? fallback ?? config.minimumBid);
@@ -147,14 +145,25 @@ export function recommendBid({
     ? Math.floor(marketValue * Math.max(0, roleMultiplier))
     : null;
 
+  const cheatSheetContext = buildCheatSheetContext({
+    playerName: nomination.playerName,
+    position,
+    roster: currentRoster,
+    remainingBudget: budget.remainingBudget,
+  });
+  const preferenceMultiplier = Number(cheatSheetContext?.preferenceMultiplier ?? 1);
+  const intrinsicPreferredValue = hasMarketValue
+    ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * preferenceMultiplier))
+    : null;
+
   const marketContext = buildMarketContext({ nomination, sales, playerPool, config });
   const pressureFactor = Number(marketContext?.pressureFactor ?? 1);
   const expectedClearingValue = hasMarketValue
-    ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * pressureFactor))
+    ? Math.max(config.minimumBid, Math.floor(intrinsicPreferredValue * pressureFactor))
     : null;
   const marketAwareValue = hasMarketValue
     ? Math.min(
-        roleAdjustedMarketValue,
+        intrinsicPreferredValue,
         expectedClearingValue + clearingBuffer(expectedClearingValue, config),
       )
     : strategicMaximumBid;
@@ -189,6 +198,12 @@ export function recommendBid({
     positionHave: position ? (currentCounts[position] ?? 0) : null,
     positionLimit: Number.isFinite(positionLimit) ? positionLimit : null,
     roleAdjustedMarketValue,
+    cheatSheetTier: cheatSheetContext?.tier ?? 'UNRATED',
+    cheatSheetTargetRole: cheatSheetContext?.targetRole ?? null,
+    cheatSheetPreferenceMultiplier: preferenceMultiplier,
+    cheatSheetReason: cheatSheetContext?.reason ?? null,
+    cheatSheetState: cheatSheetContext?.state ?? null,
+    intrinsicPreferredValue,
     expectedClearingValue,
     marketPressureFactor: pressureFactor,
     marketAwareValue,
