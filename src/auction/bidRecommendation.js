@@ -39,8 +39,6 @@ function candidateRole(position, players, config) {
   const requirements = baseStarterRequirements(config);
   if ((counts[position] ?? 0) < (requirements[position] ?? 0)) return 'STARTER';
 
-  // With Bowers locked in at TE1, a second TE is an injury/bye-week safety net,
-  // not a FLEX target. Keep TE2 in bench economics even while FLEX is open.
   if (position === 'TE' && (counts.TE ?? 0) >= (requirements.TE ?? 0)) return 'BENCH';
 
   const flexPositions = config.auctionStrategy?.flexPositions ?? ['RB', 'WR', 'TE'];
@@ -172,6 +170,8 @@ export function recommendBid({
   const hasKeeperFlier = cheatSheetContext?.keeper?.eligible === true
     && Number.isFinite(keeperFlierMaximumBid)
     && keeperFlierMaximumBid >= config.minimumBid;
+  const keeperFlierCapApplies = hasKeeperFlier
+    && (role === 'BENCH' || String(cheatSheetContext?.targetRole ?? '').includes('BENCH'));
   if (hasMarketValue && hasKeeperFlier) {
     intrinsicPreferredValue = Math.max(
       intrinsicPreferredValue,
@@ -205,6 +205,7 @@ export function recommendBid({
           strategicMaximumBid,
           marketAwareValue,
           hasBackupRoleCap ? backupRoleCap : Number.POSITIVE_INFINITY,
+          keeperFlierCapApplies ? keeperFlierMaximumBid : Number.POSITIVE_INFINITY,
         ),
       );
 
@@ -238,6 +239,7 @@ export function recommendBid({
     rosterFitSignal: cheatSheetContext?.rosterFit ?? null,
     tierScarcitySignal: cheatSheetContext?.scarcity ?? null,
     keeperSignal: cheatSheetContext?.keeper ?? null,
+    keeperFlierCap: keeperFlierCapApplies ? keeperFlierMaximumBid : null,
     primaryGoalSignal: cheatSheetContext?.primaryGoal ?? null,
     backupRoleCap: hasBackupRoleCap ? backupRoleCap : null,
     intrinsicPreferredValue,
