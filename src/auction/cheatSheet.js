@@ -1,5 +1,5 @@
 export const AUCTION_CHEAT_SHEET = {
-  version: '2026-09-01-v1',
+  version: '2026-09-01-v2',
   goals: {
     primary: 'Acquire an elite RB1 without sacrificing roster balance',
     secondary: ['Add a quality WR2', 'Add a starting QB at a sensible price'],
@@ -18,6 +18,7 @@ export const AUCTION_CHEAT_SHEET = {
   },
   players: {
     // Elite-RB chase. These are preference tiers, not fixed dollar values.
+    'Bijan Robinson': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
     'Jahmyr Gibbs': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
     'Jonathan Taylor': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
     "De'Von Achane": { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
