@@ -1,23 +1,19 @@
 export const AUCTION_CHEAT_SHEET = {
-  version: '2026-09-01-v2',
+  version: '2026-09-02-v3-dynamic-signals',
   goals: {
     primary: 'Acquire an elite RB1 without sacrificing roster balance',
     secondary: ['Add a quality WR2', 'Add a starting QB at a sensible price'],
   },
+  // Tiers are intentionally soft preference priors. They should nudge the
+  // recommendation, not impose a static dollar ceiling that ignores the room.
   tierMultipliers: {
-    STRETCH: 1.08,
+    STRETCH: 1.05,
     IDEAL: 1.03,
-    FALLBACK: 0.98,
-    VALUE_ONLY: 0.88,
-    AVOID: 0.65,
-  },
-  maxRemainingBudgetShare: {
-    RB: { STRETCH: 0.50, IDEAL: 0.45, FALLBACK: 0.36, VALUE_ONLY: 0.25, AVOID: 0.12 },
-    WR: { STRETCH: 0.38, IDEAL: 0.31, FALLBACK: 0.24, VALUE_ONLY: 0.18, AVOID: 0.10 },
-    QB: { STRETCH: 0.30, IDEAL: 0.22, FALLBACK: 0.16, VALUE_ONLY: 0.12, AVOID: 0.08 },
+    FALLBACK: 1.00,
+    VALUE_ONLY: 0.96,
+    AVOID: 0.75,
   },
   players: {
-    // Elite-RB chase. These are preference tiers, not fixed dollar values.
     'Bijan Robinson': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
     'Jahmyr Gibbs': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
     'Jonathan Taylor': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
@@ -30,7 +26,9 @@ export const AUCTION_CHEAT_SHEET = {
     'Derrick Henry': { position: 'RB', tier: 'IDEAL', targetRole: 'RB1', eliteRb: true },
     'Ashton Jeanty': { position: 'RB', tier: 'IDEAL', targetRole: 'RB1', eliteRb: true },
 
-    'Jeremiyah Love': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX' },
+    // 2026 rookie; expensive at normal market price, but especially attractive
+    // if the room ever lets him fall into cheap keeper-flier territory.
+    'Jeremiyah Love': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX', keeperUpside: 'HIGH' },
     'Kenneth Walker III': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX' },
     'Breece Hall': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX' },
     'Kyren Williams': { position: 'RB', tier: 'FALLBACK', targetRole: 'RB1/FLEX' },
@@ -41,9 +39,8 @@ export const AUCTION_CHEAT_SHEET = {
     'Bhayshul Tuten': { position: 'RB', tier: 'VALUE_ONLY', targetRole: 'FLEX/BENCH' },
     'Cam Skattebo': { position: 'RB', tier: 'VALUE_ONLY', targetRole: 'FLEX/BENCH' },
     "D'Andre Swift": { position: 'RB', tier: 'VALUE_ONLY', targetRole: 'FLEX/BENCH' },
+    'Jadarian Price': { position: 'RB', tier: 'VALUE_ONLY', targetRole: 'BENCH', keeperUpside: 'HIGH' },
 
-    // WR2 targets behind keeper Chris Olave. We do not need to force this tier
-    // if the room is expensive; the market engine can wait for value.
     "Ja'Marr Chase": { position: 'WR', tier: 'STRETCH', targetRole: 'WR1/WR2' },
     'Puka Nacua': { position: 'WR', tier: 'STRETCH', targetRole: 'WR1/WR2' },
     'Amon-Ra St. Brown': { position: 'WR', tier: 'STRETCH', targetRole: 'WR1/WR2' },
@@ -69,6 +66,8 @@ export const AUCTION_CHEAT_SHEET = {
   },
 };
 
+const TIER_ORDER = ['STRETCH', 'IDEAL', 'FALLBACK', 'VALUE_ONLY', 'AVOID'];
+
 function normalizeName(value = '') {
   return String(value).trim().toLowerCase();
 }
@@ -81,7 +80,37 @@ export function getCheatSheetPlayer(playerName) {
   return PLAYER_LOOKUP.get(normalizeName(playerName)) ?? null;
 }
 
-export function buildCheatSheetState({ roster = [], remainingBudget = 0 } = {}) {
+function tierRank(tier) {
+  const index = TIER_ORDER.indexOf(tier);
+  return index >= 0 ? index : TIER_ORDER.length;
+}
+
+function buildBoardState({ position, sales = [] } = {}) {
+  const soldNames = new Set((sales ?? []).map((sale) => normalizeName(sale?.playerName)).filter(Boolean));
+  const positionPlayers = Object.entries(AUCTION_CHEAT_SHEET.players)
+    .filter(([, entry]) => entry.position === position)
+    .map(([name, entry]) => ({ name, ...entry, sold: soldNames.has(normalizeName(name)) }));
+
+  const byTier = {};
+  for (const tier of TIER_ORDER) {
+    const tierPlayers = positionPlayers.filter((player) => player.tier === tier);
+    byTier[tier] = {
+      total: tierPlayers.length,
+      sold: tierPlayers.filter((player) => player.sold).length,
+      remaining: tierPlayers.filter((player) => !player.sold).length,
+      remainingNames: tierPlayers.filter((player) => !player.sold).map((player) => player.name),
+    };
+  }
+
+  return {
+    position,
+    byTier,
+    totalRated: positionPlayers.length,
+    totalRemaining: positionPlayers.filter((player) => !player.sold).length,
+  };
+}
+
+export function buildCheatSheetState({ roster = [], remainingBudget = 0, sales = [] } = {}) {
   const mappedRoster = roster.map((player) => ({
     player,
     cheat: getCheatSheetPlayer(player?.playerName),
@@ -90,6 +119,7 @@ export function buildCheatSheetState({ roster = [], remainingBudget = 0 } = {}) 
   const eliteRb = mappedRoster.find(({ cheat }) => cheat?.position === 'RB' && cheat?.eliteRb);
   const wrCount = roster.filter((player) => player?.position === 'WR').length;
   const qbCount = roster.filter((player) => player?.position === 'QB').length;
+  const teCount = roster.filter((player) => player?.position === 'TE').length;
 
   return {
     eliteRbSecured: Boolean(eliteRb),
@@ -97,74 +127,131 @@ export function buildCheatSheetState({ roster = [], remainingBudget = 0 } = {}) 
     rbCount: rbRoster.length,
     wrCount,
     qbCount,
+    teCount,
     remainingBudget,
     budgetMode: remainingBudget >= 140 ? 'AGGRESSIVE' : remainingBudget >= 90 ? 'BALANCED' : 'PROTECT',
+    board: {
+      RB: buildBoardState({ position: 'RB', sales }),
+      WR: buildBoardState({ position: 'WR', sales }),
+      QB: buildBoardState({ position: 'QB', sales }),
+    },
   };
 }
 
-export function buildCheatSheetContext({ playerName, position, roster = [], remainingBudget = 0 } = {}) {
-  const player = getCheatSheetPlayer(playerName);
-  const state = buildCheatSheetState({ roster, remainingBudget });
+function scarcitySignal({ player, position, state }) {
+  if (!player || !state?.board?.[position]) return { multiplier: 1, urgency: 'NONE', reason: null };
 
-  if (!player) {
-    return {
-      player: null,
-      state,
-      tier: 'UNRATED',
-      targetRole: null,
-      preferenceMultiplier: 1,
-      maximumCheatSheetBid: null,
-      reason: 'Player is not yet explicitly rated on the cheat sheet.',
-    };
+  const board = state.board[position];
+  const rank = tierRank(player.tier);
+  const betterOrEqualRemaining = TIER_ORDER
+    .slice(0, rank + 1)
+    .reduce((sum, tier) => sum + (board.byTier[tier]?.remaining ?? 0), 0);
+
+  const starterOpen = position === 'RB'
+    ? !state.eliteRbSecured
+    : position === 'WR'
+      ? state.wrCount < 2
+      : position === 'QB'
+        ? state.qbCount < 1
+        : false;
+
+  if (!starterOpen) return { multiplier: 1, urgency: 'LOW', reason: 'primary starter goal at this position is already filled' };
+
+  if (betterOrEqualRemaining <= 1) {
+    return { multiplier: 1.08, urgency: 'HIGH', reason: `last ${player.tier}-or-better target at ${position}` };
   }
+  if (betterOrEqualRemaining <= 3) {
+    return { multiplier: 1.04, urgency: 'MEDIUM', reason: `only ${betterOrEqualRemaining} ${player.tier}-or-better ${position} targets remain` };
+  }
+  if (betterOrEqualRemaining >= 7) {
+    return { multiplier: 0.98, urgency: 'LOW', reason: `${betterOrEqualRemaining} ${player.tier}-or-better ${position} targets still remain` };
+  }
+  return { multiplier: 1, urgency: 'NORMAL', reason: `${betterOrEqualRemaining} ${player.tier}-or-better ${position} targets remain` };
+}
 
-  let preferenceMultiplier = Number(AUCTION_CHEAT_SHEET.tierMultipliers[player.tier] ?? 1);
-  const reasons = [`${player.tier} cheat-sheet target`];
-
+function rosterFitSignal({ position, state }) {
   if (position === 'RB') {
-    if (!state.eliteRbSecured && player.eliteRb) {
-      preferenceMultiplier += state.budgetMode === 'AGGRESSIVE' ? 0.04 : state.budgetMode === 'BALANCED' ? 0.02 : 0;
-      reasons.push('elite RB1 is still an open primary goal');
-    } else if (state.eliteRbSecured) {
-      preferenceMultiplier *= 0.72;
-      reasons.push(`elite RB1 already secured (${state.eliteRbName})`);
-    } else if (state.rbCount >= 1) {
-      preferenceMultiplier *= 0.88;
-      reasons.push('RB starter is already filled, so this is mainly FLEX/depth');
-    }
+    if (!state.eliteRbSecured) return { multiplier: 1.04, reason: 'elite RB1 remains the primary open goal' };
+    if (state.rbCount === 1) return { multiplier: 0.84, reason: `elite RB1 already secured (${state.eliteRbName}); another RB is FLEX/depth` };
+    return { multiplier: 0.7, reason: 'multiple RBs are already rostered; additional RB is bench depth' };
   }
-
-  if (position === 'WR' && state.wrCount >= 2) {
-    preferenceMultiplier *= 0.82;
-    reasons.push('both starting WR slots are already filled');
+  if (position === 'WR') {
+    if (state.wrCount < 2) return { multiplier: 1.03, reason: 'WR2 starter slot is still open' };
+    return { multiplier: 0.82, reason: 'both starting WR slots are filled' };
   }
-
-  if (position === 'QB' && state.qbCount >= 1) {
-    preferenceMultiplier *= 0.7;
-    reasons.push('QB1 is already secured');
+  if (position === 'QB') {
+    if (state.qbCount < 1) return { multiplier: 1.02, reason: 'QB1 starter slot is still open' };
+    return { multiplier: 0.7, reason: 'QB1 is already secured' };
   }
-
-  if (state.budgetMode === 'PROTECT' && player.tier === 'STRETCH') {
-    preferenceMultiplier = Math.min(preferenceMultiplier, 1);
-    reasons.push('remaining budget is in protect mode, so stretch premium is disabled');
+  if (position === 'TE' && state.teCount >= 1) {
+    return { multiplier: 0.35, reason: 'Bowers already fills TE1; TE2 is only a low-cost safety net' };
   }
+  return { multiplier: 1, reason: null };
+}
 
-  const share = Number(AUCTION_CHEAT_SHEET.maxRemainingBudgetShare?.[position]?.[player.tier]);
-  const maximumCheatSheetBid = Number.isFinite(share)
-    ? Math.max(1, Math.floor(remainingBudget * share))
-    : null;
+function keeperSignal({ player, marketValue, experienceYears, config }) {
+  const flier = config?.auctionStrategy?.keeperFlier ?? {};
+  const marketCap = Number(flier.maximumMarketValue ?? 25);
+  const manualHighUpside = player?.keeperUpside === 'HIGH';
+  const rookie = Number(experienceYears) === 0;
+  const cheapEnough = Number.isFinite(Number(marketValue)) && Number(marketValue) <= marketCap;
+  const eligible = cheapEnough && (manualHighUpside || rookie);
 
-  if (Number.isFinite(maximumCheatSheetBid)) {
-    reasons.push(`cheat-sheet budget guardrail is $${maximumCheatSheetBid}`);
+  return {
+    eligible,
+    rookie,
+    manualHighUpside,
+    maximumBid: eligible ? Number(flier.maximumBid ?? 8) : null,
+    multiplier: eligible ? 1 + Number(flier.rookiePreferenceBonus ?? 0.08) : 1,
+    reason: eligible
+      ? `${rookie ? 'rookie' : 'young upside'} keeper flier at a cheap market value`
+      : null,
+  };
+}
+
+export function buildCheatSheetContext({
+  playerName,
+  position,
+  roster = [],
+  remainingBudget = 0,
+  sales = [],
+  marketValue = null,
+  experienceYears = null,
+  config = null,
+} = {}) {
+  const player = getCheatSheetPlayer(playerName);
+  const state = buildCheatSheetState({ roster, remainingBudget, sales });
+  const rosterFit = rosterFitSignal({ position, state });
+  const scarcity = scarcitySignal({ player, position, state });
+  const keeper = keeperSignal({ player, marketValue, experienceYears, config });
+
+  let preferenceMultiplier = Number(AUCTION_CHEAT_SHEET.tierMultipliers[player?.tier] ?? 1);
+  const reasons = [player ? `${player.tier} pre-draft preference` : 'unrated pre-draft player'];
+
+  preferenceMultiplier *= rosterFit.multiplier;
+  if (rosterFit.reason) reasons.push(rosterFit.reason);
+
+  preferenceMultiplier *= scarcity.multiplier;
+  if (scarcity.reason) reasons.push(scarcity.reason);
+
+  preferenceMultiplier *= keeper.multiplier;
+  if (keeper.reason) reasons.push(keeper.reason);
+
+  if (state.budgetMode === 'PROTECT' && preferenceMultiplier > 1.02) {
+    preferenceMultiplier = 1.02;
+    reasons.push('protect mode limits preference premiums');
   }
 
   return {
     player,
     state,
-    tier: player.tier,
-    targetRole: player.targetRole,
-    preferenceMultiplier: Number(Math.max(0.5, Math.min(1.15, preferenceMultiplier)).toFixed(3)),
-    maximumCheatSheetBid,
+    tier: player?.tier ?? 'UNRATED',
+    targetRole: player?.targetRole ?? null,
+    preferenceMultiplier: Number(Math.max(0.45, Math.min(1.15, preferenceMultiplier)).toFixed(3)),
+    maximumCheatSheetBid: null,
+    rosterFit,
+    scarcity,
+    keeper,
     reason: reasons.join('; '),
   };
 }
