@@ -91,6 +91,38 @@ export const LEAGUE_CONFIG = {
         { minHave: 2, maxHave: 99, multiplier: 0 },
       ],
     },
+    // ESPN already supplies injuryStatus/news metadata. This layer turns that
+    // current information into a deterministic availability adjustment before
+    // the AI sees the candidate window. Explicit per-player overrides can be
+    // supplied for situations ESPN has not caught yet (suspension/exempt list,
+    // breaking practice news, etc.).
+    playerAvailability: {
+      statusMultipliers: {
+        normal: 1,
+        questionable: 0.94,
+        doubtful: 0.78,
+        high_risk: 0.68,
+        out: 0.35,
+        ir: 0.20,
+      },
+      excludeStatuses: ['suspended'],
+      overrides: {},
+    },
+    // QB1/QB2 are starter-quality roster spots. A speculative quarterback can
+    // still become attractive as QB3, but should not receive the full missing-
+    // starter benefit simply because the roster still needs a second QB.
+    quarterbackStrategy: {
+      qb2QualityGate: {
+        minimum: 48,
+        fullCredit: 78,
+        minimumMultiplier: 0.45,
+      },
+      pairGuard: {
+        blockSecondQbBeforeRound: 11,
+        exceptionalConsensusValue: 90,
+        exceptionalDraftScoreGap: 4,
+      },
+    },
     // The AI layer is deliberately constrained: it may only reorder the
     // deterministic top candidates and can never introduce an ineligible player.
     // The local reranker service keeps the OpenAI API key out of the browser bundle.
