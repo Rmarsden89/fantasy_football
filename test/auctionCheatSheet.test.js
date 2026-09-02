@@ -5,8 +5,8 @@ import { AUCTION_LEAGUE_CONFIG } from '../src/auction/config.js';
 import { buildCheatSheetContext, buildCheatSheetState, getCheatSheetPlayer } from '../src/auction/cheatSheet.js';
 
 const keepers = [
+  { playerName: 'Bijan Robinson', position: 'RB', price: 90 },
   { playerName: 'Brock Bowers', position: 'TE', price: 28 },
-  { playerName: 'Chris Olave', position: 'WR', price: 25 },
 ];
 
 test('cheat sheet recognizes elite RB targets', () => {
@@ -16,75 +16,70 @@ test('cheat sheet recognizes elite RB targets', () => {
   assert.equal(gibbs.targetRole, 'RB1');
 });
 
-test('elite RB preference is a soft boost rather than a hard dollar cap', () => {
+test('Bijan keeper starts the draft with the elite RB goal filled', () => {
+  const state = buildCheatSheetState({ roster: keepers, remainingBudget: 132 });
+  assert.equal(state.eliteRbSecured, true);
+  assert.equal(state.eliteRbName, 'Bijan Robinson');
+  assert.equal(state.wrCount, 0);
+});
+
+test('second elite RB is de-prioritized behind open roster needs', () => {
   const context = buildCheatSheetContext({
     playerName: 'Jahmyr Gibbs',
     position: 'RB',
     roster: keepers,
-    remainingBudget: 197,
+    remainingBudget: 132,
     config: AUCTION_LEAGUE_CONFIG,
   });
 
-  assert.equal(context.state.eliteRbSecured, false);
-  assert.equal(context.state.budgetMode, 'AGGRESSIVE');
-  assert.ok(context.preferenceMultiplier > 1);
-  assert.equal(context.maximumCheatSheetBid, null);
-  assert.equal(context.primaryGoal.additionalReserve, 0);
-});
-
-test('non-RB purchases preserve extra budget while elite RB targets remain', () => {
-  const context = buildCheatSheetContext({
-    playerName: 'Puka Nacua',
-    position: 'WR',
-    roster: keepers,
-    remainingBudget: 197,
-    config: AUCTION_LEAGUE_CONFIG,
-  });
-
-  assert.equal(context.primaryGoal.open, true);
-  assert.equal(context.primaryGoal.targetReserve, 85);
-  assert.equal(context.primaryGoal.additionalReserve, 57);
-});
-
-test('elite RB chase turns down after one is secured', () => {
-  const roster = [
-    ...keepers,
-    { playerName: 'Jahmyr Gibbs', position: 'RB', price: 90 },
-  ];
-
-  const state = buildCheatSheetState({ roster, remainingBudget: 107 });
-  const context = buildCheatSheetContext({
-    playerName: 'Jonathan Taylor',
-    position: 'RB',
-    roster,
-    remainingBudget: 107,
-    config: AUCTION_LEAGUE_CONFIG,
-  });
-
-  assert.equal(state.eliteRbSecured, true);
-  assert.equal(state.eliteRbName, 'Jahmyr Gibbs');
+  assert.equal(context.state.eliteRbSecured, true);
   assert.ok(context.preferenceMultiplier < 1);
   assert.equal(context.primaryGoal.additionalReserve, 0);
 });
 
-test('tier urgency rises when a target is the last stretch RB left', () => {
+test('open WR starters can move preferred targets toward full market value but not above it', () => {
+  const context = buildCheatSheetContext({
+    playerName: 'Nico Collins',
+    position: 'WR',
+    roster: keepers,
+    remainingBudget: 132,
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(context.state.wrCount, 0);
+  assert.ok(context.preferenceMultiplier <= 1);
+  assert.ok(context.preferenceMultiplier >= 0.95);
+});
+
+test('Olave remains an ideal auction target rather than a keeper commitment', () => {
+  const olave = getCheatSheetPlayer('Chris Olave');
+  assert.equal(olave.tier, 'IDEAL');
+  assert.equal(olave.position, 'WR');
+});
+
+test('tier urgency rises when a target is the last preferred WR left', () => {
   const sales = [
-    { playerName: 'Bijan Robinson', position: 'RB' },
-    { playerName: 'Jonathan Taylor', position: 'RB' },
-    { playerName: "De'Von Achane", position: 'RB' },
-    { playerName: 'Christian McCaffrey', position: 'RB' },
+    { playerName: "Ja'Marr Chase", position: 'WR' },
+    { playerName: 'Puka Nacua', position: 'WR' },
+    { playerName: 'Amon-Ra St. Brown', position: 'WR' },
+    { playerName: 'Jaxon Smith-Njigba', position: 'WR' },
+    { playerName: 'CeeDee Lamb', position: 'WR' },
+    { playerName: 'Drake London', position: 'WR' },
+    { playerName: 'Nico Collins', position: 'WR' },
+    { playerName: 'Garrett Wilson', position: 'WR' },
+    { playerName: 'Rashee Rice', position: 'WR' },
+    { playerName: 'A.J. Brown', position: 'WR' },
   ];
   const context = buildCheatSheetContext({
-    playerName: 'Jahmyr Gibbs',
-    position: 'RB',
+    playerName: 'Chris Olave',
+    position: 'WR',
     roster: keepers,
-    remainingBudget: 197,
+    remainingBudget: 132,
     sales,
     config: AUCTION_LEAGUE_CONFIG,
   });
 
   assert.equal(context.scarcity.urgency, 'HIGH');
-  assert.equal(context.state.board.RB.byTier.STRETCH.remaining, 1);
 });
 
 test('cheap rookie upside creates a keeper-flier signal', () => {
@@ -92,7 +87,7 @@ test('cheap rookie upside creates a keeper-flier signal', () => {
     playerName: 'Jadarian Price',
     position: 'RB',
     roster: keepers,
-    remainingBudget: 197,
+    remainingBudget: 132,
     marketValue: 20,
     experienceYears: 0,
     config: AUCTION_LEAGUE_CONFIG,
@@ -101,4 +96,19 @@ test('cheap rookie upside creates a keeper-flier signal', () => {
   assert.equal(context.keeper.eligible, true);
   assert.equal(context.keeper.rookie, true);
   assert.equal(context.keeper.maximumBid, 8);
+});
+
+test('unknown experience is not automatically considered a rookie', () => {
+  const context = buildCheatSheetContext({
+    playerName: 'Unknown Player',
+    position: 'WR',
+    roster: keepers,
+    remainingBudget: 132,
+    marketValue: 5,
+    experienceYears: null,
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(context.keeper.rookie, false);
+  assert.equal(context.keeper.eligible, false);
 });
