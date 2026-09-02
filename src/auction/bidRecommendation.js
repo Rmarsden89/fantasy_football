@@ -152,6 +152,8 @@ export function recommendBid({
     remainingBudget: budget.remainingBudget,
   });
   const preferenceMultiplier = Number(cheatSheetContext?.preferenceMultiplier ?? 1);
+  const cheatSheetMaximumBid = Number(cheatSheetContext?.maximumCheatSheetBid);
+  const hasCheatSheetMaximum = Number.isFinite(cheatSheetMaximumBid) && cheatSheetMaximumBid >= config.minimumBid;
   const intrinsicPreferredValue = hasMarketValue
     ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * preferenceMultiplier))
     : null;
@@ -176,6 +178,7 @@ export function recommendBid({
           budget.maximumLegalBid,
           strategicMaximumBid,
           marketAwareValue,
+          hasCheatSheetMaximum ? cheatSheetMaximumBid : Number.POSITIVE_INFINITY,
         ),
       );
 
@@ -201,6 +204,7 @@ export function recommendBid({
     cheatSheetTier: cheatSheetContext?.tier ?? 'UNRATED',
     cheatSheetTargetRole: cheatSheetContext?.targetRole ?? null,
     cheatSheetPreferenceMultiplier: preferenceMultiplier,
+    cheatSheetMaximumBid: hasCheatSheetMaximum ? cheatSheetMaximumBid : null,
     cheatSheetReason: cheatSheetContext?.reason ?? null,
     cheatSheetState: cheatSheetContext?.state ?? null,
     intrinsicPreferredValue,
