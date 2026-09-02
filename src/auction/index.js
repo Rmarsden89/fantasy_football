@@ -1,12 +1,13 @@
 import { fetchEspnPlayerPool } from '../espnPlayerPool.js';
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
 import { AUCTION_CHEAT_SHEET } from './cheatSheet.js';
+import { createAutoBidController } from './autoBidController.js';
 import { createEspnAuctionWatcher } from './espnAuctionWatcher.js';
 import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.5.0-cheat-sheet-auction';
+const HELPER_VERSION = '0.6.0-practice-autobid';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -164,7 +165,10 @@ function downloadJson(filename, value) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = {}) {
+export function startAuctionPracticeHelper({
+  config = AUCTION_LEAGUE_CONFIG,
+  autoBid = false,
+} = {}) {
   let latest = { sales: [], teams: [], myBudget: buildMyBudgetState({ config }) };
   let latestNomination = null;
   let latestRecommendation = null;
@@ -209,9 +213,29 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     },
   });
 
+  const autoBidController = createAutoBidController({
+    enabled: false,
+    getRecommendation: () => latestRecommendation,
+    onBid: (bid) => {
+      logEvent('auto-bid', bid);
+      console.log(
+        `🤖 AUTO-BID: ${bid.playerName} $${bid.submittedBid} / fixed ceiling $${bid.ceiling}`,
+      );
+    },
+    onStateChange: (autoBidState) => {
+      logEvent('auto-bid-state', autoBidState);
+    },
+  });
+
   const initialSales = watcher.start();
   latest = printState(initialSales, config);
   nominationWatcher.start();
+  if (autoBid) {
+    autoBidController.start();
+    console.warn(
+      '🤖 PRACTICE AUTO-BID ENABLED. The helper will place incremental $1 bids up to each fixed recommendation ceiling and stop when already winning or the ceiling is reached.',
+    );
+  }
 
   fetchEspnPlayerPool({ leagueId: config.leagueId, season: config.season })
     .then((pool) => {
@@ -230,6 +254,7 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     version: HELPER_VERSION,
     config,
     cheatSheetVersion: AUCTION_CHEAT_SHEET.version,
+    autoBidEnabled: Boolean(autoBid),
     myBudget: latest.myBudget,
   });
 
@@ -239,11 +264,26 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     cheatSheet: AUCTION_CHEAT_SHEET,
     watcher,
     nominationWatcher,
+    autoBidController,
     getState: () => latest,
     getNomination: () => latestNomination,
     getRecommendation: () => latestRecommendation,
     getLogs: () => [...sessionLog],
     getPlayerPoolStatus: () => ({ status: playerPoolStatus, count: playerPool.length }),
+    getAutoBidState: () => autoBidController.getState(),
+    getAutoBidHistory: () => autoBidController.getHistory(),
+    enableAutoBid: () => {
+      const state = autoBidController.enable();
+      logEvent('auto-bid-enabled', state);
+      console.warn('🤖 PRACTICE AUTO-BID ENABLED.');
+      return state;
+    },
+    disableAutoBid: () => {
+      const state = autoBidController.stop();
+      logEvent('auto-bid-disabled', state);
+      console.warn('🛑 PRACTICE AUTO-BID DISABLED.');
+      return state;
+    },
     printState: () => printState(watcher.getSales(), config),
     exportLogs: () => {
       const snapshot = {
@@ -254,6 +294,10 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
         sales: watcher.getSales(),
         state: printState(watcher.getSales(), config),
         playerPoolStatus: { status: playerPoolStatus, count: playerPool.length },
+        autoBid: {
+          state: autoBidController.getState(),
+          history: autoBidController.getHistory(),
+        },
         nomination: latestNomination,
         recommendation: latestRecommendation,
         events: [...sessionLog],
@@ -265,6 +309,7 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     stop: () => {
       watcher.stop();
       nominationWatcher.stop();
+      autoBidController.stop();
       logEvent('session-stop', {});
     },
   };
@@ -285,6 +330,6 @@ if (typeof window !== 'undefined') {
   };
 
   console.log(
-    `Fantasy Auction Helper ${HELPER_VERSION} loaded. Run FantasyAuctionHelper.start() in the console to begin.`,
+    `Fantasy Auction Helper ${HELPER_VERSION} loaded. Run FantasyAuctionHelper.start() for recommendations or FantasyAuctionHelper.start({ autoBid: true }) for practice auto-bidding.`,
   );
 }
