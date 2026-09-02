@@ -4,16 +4,40 @@ import assert from 'node:assert/strict';
 import { AUCTION_LEAGUE_CONFIG } from '../src/auction/config.js';
 import { buildMyBudgetState, recommendBid } from '../src/auction/bidRecommendation.js';
 
-test('Bowers and Olave keeper commitments leave $197 for the auction', () => {
+test('Bijan and Bowers keeper commitments leave $132 for the auction', () => {
   const budget = buildMyBudgetState({ config: AUCTION_LEAGUE_CONFIG });
-  assert.equal(budget.keeperSpend, 53);
-  assert.equal(budget.remainingBudget, 197);
+  assert.equal(budget.keeperSpend, 118);
+  assert.equal(budget.remainingBudget, 132);
   assert.equal(budget.playersRostered, 2);
   assert.equal(budget.spotsLeft, 13);
-  assert.equal(budget.maximumLegalBid, 185);
+  assert.equal(budget.maximumLegalBid, 120);
 });
 
-test('elite RB stretch target receives a soft preference without a static cheat-sheet cap', () => {
+test('stretch preference cannot inflate a recommendation above the market-value anchor', () => {
+  const customConfig = {
+    ...AUCTION_LEAGUE_CONFIG,
+    myKeepers: [
+      { playerName: 'Brock Bowers', position: 'TE', price: 28 },
+      { playerName: 'Chris Olave', position: 'WR', price: 25 },
+    ],
+  };
+  const recommendation = recommendBid({
+    nomination: {
+      playerName: 'Bijan Robinson',
+      nflTeam: 'ATL',
+      position: 'RB',
+      marketValue: 108,
+      currentBid: 1,
+    },
+    config: customConfig,
+  });
+
+  assert.equal(recommendation.cheatSheetTier, 'STRETCH');
+  assert.equal(recommendation.intrinsicMarketCap, 108);
+  assert.ok(recommendation.buyAtOrBelow <= 108);
+});
+
+test('Bijan keeper means a second elite RB is FLEX and de-prioritized', () => {
   const recommendation = recommendBid({
     nomination: {
       playerName: 'Jahmyr Gibbs',
@@ -25,54 +49,31 @@ test('elite RB stretch target receives a soft preference without a static cheat-
     config: AUCTION_LEAGUE_CONFIG,
   });
 
-  assert.equal(recommendation.role, 'STARTER');
-  assert.equal(recommendation.cheatSheetTier, 'STRETCH');
-  assert.equal(recommendation.cheatSheetMaximumBid, null);
-  assert.ok(recommendation.cheatSheetPreferenceMultiplier > 1);
-  assert.equal(recommendation.primaryGoalAdditionalReserve, 0);
-  assert.equal(recommendation.buyAtOrBelow, 119);
-});
-
-test('non-RB splurge is constrained while elite RB primary goal remains open', () => {
-  const recommendation = recommendBid({
-    nomination: {
-      playerName: 'Puka Nacua',
-      nflTeam: 'LAR',
-      position: 'WR',
-      marketValue: 107,
-      currentBid: 1,
-    },
-    config: AUCTION_LEAGUE_CONFIG,
-  });
-
-  assert.equal(recommendation.role, 'STARTER');
-  assert.equal(recommendation.primaryGoalSignal.open, true);
-  assert.equal(recommendation.primaryGoalSignal.targetReserve, 85);
-  assert.equal(recommendation.primaryGoalAdditionalReserve, 57);
-  assert.equal(recommendation.buyAtOrBelow, 52);
-});
-
-test('once an elite RB is secured, a second elite RB is strongly de-prioritized', () => {
-  const recommendation = recommendBid({
-    nomination: {
-      playerName: 'Jonathan Taylor',
-      nflTeam: 'IND',
-      position: 'RB',
-      marketValue: 105,
-      currentBid: 1,
-    },
-    purchases: [
-      { playerName: 'Jahmyr Gibbs', position: 'RB', price: 90, fantasyTeam: 'Uncle RICO' },
-    ],
-    config: AUCTION_LEAGUE_CONFIG,
-  });
-
   assert.equal(recommendation.role, 'FLEX');
   assert.equal(recommendation.cheatSheetState.eliteRbSecured, true);
-  assert.equal(recommendation.cheatSheetState.eliteRbName, 'Jahmyr Gibbs');
+  assert.equal(recommendation.cheatSheetState.eliteRbName, 'Bijan Robinson');
   assert.ok(recommendation.cheatSheetPreferenceMultiplier < 1);
   assert.equal(recommendation.primaryGoalAdditionalReserve, 0);
-  assert.ok(recommendation.buyAtOrBelow < 60);
+  assert.ok(recommendation.buyAtOrBelow < 110);
+});
+
+test('open WR starter gets meaningful budget without an elite-RB reserve', () => {
+  const recommendation = recommendBid({
+    nomination: {
+      playerName: 'Nico Collins',
+      nflTeam: 'HOU',
+      position: 'WR',
+      marketValue: 62,
+      currentBid: 1,
+    },
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(recommendation.role, 'STARTER');
+  assert.equal(recommendation.primaryGoalSignal.open, false);
+  assert.equal(recommendation.primaryGoalAdditionalReserve, 0);
+  assert.ok(recommendation.buyAtOrBelow > 20);
+  assert.ok(recommendation.buyAtOrBelow <= 62);
 });
 
 test('TE2 is treated as a cheap backup rather than a FLEX target', () => {
@@ -92,7 +93,7 @@ test('TE2 is treated as a cheap backup rather than a FLEX target', () => {
   assert.equal(recommendation.buyAtOrBelow, 5);
 });
 
-test('cheap rookie can receive keeper-flier support without consuming starter money', () => {
+test('cheap explicitly tagged upside player can receive keeper-flier support', () => {
   const recommendation = recommendBid({
     nomination: {
       playerName: 'Jadarian Price',
@@ -102,15 +103,30 @@ test('cheap rookie can receive keeper-flier support without consuming starter mo
       currentBid: 1,
       experienceYears: 0,
     },
-    purchases: [
-      { playerName: 'Omarion Hampton', position: 'RB', price: 78, fantasyTeam: 'Uncle RICO' },
-    ],
     config: AUCTION_LEAGUE_CONFIG,
   });
 
   assert.equal(recommendation.keeperSignal.eligible, true);
   assert.equal(recommendation.keeperSignal.maximumBid, 8);
   assert.ok(recommendation.buyAtOrBelow <= 8);
+});
+
+test('missing experience data is not treated as rookie status', () => {
+  const recommendation = recommendBid({
+    nomination: {
+      playerName: 'Cheap Veteran',
+      nflTeam: 'FA',
+      position: 'WR',
+      marketValue: 5,
+      currentBid: 1,
+      experienceYears: null,
+    },
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(recommendation.experienceYears, null);
+  assert.equal(recommendation.keeperSignal.rookie, false);
+  assert.equal(recommendation.keeperSignal.eligible, false);
 });
 
 test('collapsed opponent QB demand lowers the ceiling for an otherwise valuable starter', () => {
