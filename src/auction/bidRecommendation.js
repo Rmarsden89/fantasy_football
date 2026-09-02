@@ -150,13 +150,29 @@ export function recommendBid({
     position,
     roster: currentRoster,
     remainingBudget: budget.remainingBudget,
+    sales,
+    marketValue: hasMarketValue ? marketValue : null,
+    experienceYears: nomination.experienceYears ?? null,
+    config,
   });
   const preferenceMultiplier = Number(cheatSheetContext?.preferenceMultiplier ?? 1);
-  const cheatSheetMaximumBid = Number(cheatSheetContext?.maximumCheatSheetBid);
-  const hasCheatSheetMaximum = Number.isFinite(cheatSheetMaximumBid) && cheatSheetMaximumBid >= config.minimumBid;
-  const intrinsicPreferredValue = hasMarketValue
+  let intrinsicPreferredValue = hasMarketValue
     ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * preferenceMultiplier))
     : null;
+
+  // A cheap rookie keeper flier may deserve a few dollars even if ordinary
+  // bench math would value the current-year role lower. This never overrides
+  // starter reserves, legal max, or explicit backup-role caps.
+  const keeperFlierMaximumBid = Number(cheatSheetContext?.keeper?.maximumBid);
+  const hasKeeperFlier = cheatSheetContext?.keeper?.eligible === true
+    && Number.isFinite(keeperFlierMaximumBid)
+    && keeperFlierMaximumBid >= config.minimumBid;
+  if (hasMarketValue && hasKeeperFlier) {
+    intrinsicPreferredValue = Math.max(
+      intrinsicPreferredValue,
+      Math.min(keeperFlierMaximumBid, marketValue),
+    );
+  }
 
   const marketContext = buildMarketContext({ nomination, sales, playerPool, config });
   const pressureFactor = Number(marketContext?.pressureFactor ?? 1);
@@ -170,6 +186,11 @@ export function recommendBid({
       )
     : strategicMaximumBid;
 
+  const backupRoleCap = role === 'BENCH'
+    ? Number(config.auctionStrategy?.backupRoleCaps?.[position])
+    : null;
+  const hasBackupRoleCap = Number.isFinite(backupRoleCap) && backupRoleCap >= config.minimumBid;
+
   const buyAtOrBelow = atPositionLimit
     ? 0
     : Math.max(
@@ -178,7 +199,7 @@ export function recommendBid({
           budget.maximumLegalBid,
           strategicMaximumBid,
           marketAwareValue,
-          hasCheatSheetMaximum ? cheatSheetMaximumBid : Number.POSITIVE_INFINITY,
+          hasBackupRoleCap ? backupRoleCap : Number.POSITIVE_INFINITY,
         ),
       );
 
@@ -197,6 +218,7 @@ export function recommendBid({
     marketValue: hasMarketValue ? marketValue : null,
     marketValueSource: nomination.marketValueSource ?? (hasMarketValue ? 'espn-practice' : null),
     projectedPoints: Number.isFinite(Number(nomination.projectedPoints)) ? Number(nomination.projectedPoints) : null,
+    experienceYears: Number.isFinite(Number(nomination.experienceYears)) ? Number(nomination.experienceYears) : null,
     role,
     positionHave: position ? (currentCounts[position] ?? 0) : null,
     positionLimit: Number.isFinite(positionLimit) ? positionLimit : null,
@@ -204,9 +226,13 @@ export function recommendBid({
     cheatSheetTier: cheatSheetContext?.tier ?? 'UNRATED',
     cheatSheetTargetRole: cheatSheetContext?.targetRole ?? null,
     cheatSheetPreferenceMultiplier: preferenceMultiplier,
-    cheatSheetMaximumBid: hasCheatSheetMaximum ? cheatSheetMaximumBid : null,
+    cheatSheetMaximumBid: null,
     cheatSheetReason: cheatSheetContext?.reason ?? null,
     cheatSheetState: cheatSheetContext?.state ?? null,
+    rosterFitSignal: cheatSheetContext?.rosterFit ?? null,
+    tierScarcitySignal: cheatSheetContext?.scarcity ?? null,
+    keeperSignal: cheatSheetContext?.keeper ?? null,
+    backupRoleCap: hasBackupRoleCap ? backupRoleCap : null,
     intrinsicPreferredValue,
     expectedClearingValue,
     marketPressureFactor: pressureFactor,
