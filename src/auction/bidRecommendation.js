@@ -160,9 +160,6 @@ export function recommendBid({
     ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * preferenceMultiplier))
     : null;
 
-  // A cheap rookie keeper flier may deserve a few dollars even if ordinary
-  // bench math would value the current-year role lower. This never overrides
-  // starter reserves, legal max, or explicit backup-role caps.
   const keeperFlierMaximumBid = Number(cheatSheetContext?.keeper?.maximumBid);
   const hasKeeperFlier = cheatSheetContext?.keeper?.eligible === true
     && Number.isFinite(keeperFlierMaximumBid)
@@ -213,6 +210,7 @@ export function recommendBid({
 
   return {
     playerName: nomination.playerName,
+    nflTeam: nomination.nflTeam ?? null,
     position,
     currentBid: hasCurrentBid ? currentBid : null,
     marketValue: hasMarketValue ? marketValue : null,
