@@ -49,6 +49,19 @@ export const AUCTION_LEAGUE_CONFIG = {
       FLEX: 0.85,
       BENCH: 0.35,
     },
+    // Bowers already fills TE1. TE2 is a low-cost injury/bye-week safety net,
+    // not a position where we want meaningful discretionary spend.
+    backupRoleCaps: {
+      TE: 5,
+    },
+    keeperFlier: {
+      // Cheap rookies can carry asymmetric value because next year's keeper
+      // salary is only the purchase price + $10. Keep this intentionally small
+      // so keeper upside never steals starter money.
+      maximumBid: 8,
+      maximumMarketValue: 25,
+      rookiePreferenceBonus: 0.08,
+    },
     market: {
       clearingBufferPct: 0.05,
       minimumClearingBuffer: 2,
