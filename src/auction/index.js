@@ -1,11 +1,12 @@
 import { fetchEspnPlayerPool } from '../espnPlayerPool.js';
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
+import { AUCTION_CHEAT_SHEET } from './cheatSheet.js';
 import { createEspnAuctionWatcher } from './espnAuctionWatcher.js';
 import { createNominationWatcher } from './nominationWatcher.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.4.0-market-aware-auction';
+const HELPER_VERSION = '0.5.0-cheat-sheet-auction';
 
 function createTeamState(teamName, config = AUCTION_LEAGUE_CONFIG) {
   return {
@@ -67,11 +68,14 @@ function printRecommendation(recommendation) {
     player: recommendation.playerName,
     position: recommendation.position,
     rosterRole: recommendation.role,
-    haveAtPosition: recommendation.positionHave,
-    positionLimit: recommendation.positionLimit,
+    cheatTier: recommendation.cheatSheetTier,
+    targetRole: recommendation.cheatSheetTargetRole,
+    preference: recommendation.cheatSheetPreferenceMultiplier,
+    cheatCap: recommendation.cheatSheetMaximumBid,
     bidWhenNominated: recommendation.currentBid,
     espnValue: recommendation.marketValue,
     roleAdjustedValue: recommendation.roleAdjustedMarketValue,
+    preferredValue: recommendation.intrinsicPreferredValue,
     expectedClearing: recommendation.expectedClearingValue,
     marketPressure: recommendation.marketPressureFactor,
     buyAtOrBelow: recommendation.buyAtOrBelow,
@@ -100,9 +104,11 @@ function printRecommendation(recommendation) {
 
   console.log(
     `${recommendation.playerName}: recommended ceiling is $${recommendation.buyAtOrBelow} — ${roleText}; `
-    + `${marketText}. $${recommendation.strategicReserveAfterWin} remains protected for the rest of the roster after the win. `
+    + `${recommendation.cheatSheetTier} target. ${marketText}. `
+    + `$${recommendation.strategicReserveAfterWin} remains protected after a win. `
     + 'This ceiling is fixed for the nomination and will not move with live bids.',
   );
+  if (recommendation.cheatSheetReason) console.log(`Cheat sheet: ${recommendation.cheatSheetReason}`);
   console.groupEnd();
 }
 
@@ -193,8 +199,6 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
     onSale: (sale, sales) => {
       latest = printState(sales, config);
       logEvent('sale', sale);
-      // Deliberately do not recalculate the just-completed nomination here.
-      // The next recommendation is created only when ESPN shows a new nominee.
     },
   });
 
@@ -225,12 +229,14 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
   logEvent('session-start', {
     version: HELPER_VERSION,
     config,
+    cheatSheetVersion: AUCTION_CHEAT_SHEET.version,
     myBudget: latest.myBudget,
   });
 
   const session = {
     version: HELPER_VERSION,
     config,
+    cheatSheet: AUCTION_CHEAT_SHEET,
     watcher,
     nominationWatcher,
     getState: () => latest,
@@ -244,6 +250,7 @@ export function startAuctionPracticeHelper({ config = AUCTION_LEAGUE_CONFIG } = 
         exportedAt: new Date().toISOString(),
         version: HELPER_VERSION,
         config,
+        cheatSheet: AUCTION_CHEAT_SHEET,
         sales: watcher.getSales(),
         state: printState(watcher.getSales(), config),
         playerPoolStatus: { status: playerPoolStatus, count: playerPool.length },
@@ -270,6 +277,7 @@ if (typeof window !== 'undefined') {
   window.FantasyAuctionHelper = {
     version: HELPER_VERSION,
     config: AUCTION_LEAGUE_CONFIG,
+    cheatSheet: AUCTION_CHEAT_SHEET,
     buildAuctionState,
     buildMyBudgetState,
     recommendBid,
