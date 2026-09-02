@@ -1,17 +1,18 @@
 export const AUCTION_CHEAT_SHEET = {
-  version: '2026-09-02-v4-dynamic-goal-reserve',
+  version: '2026-09-02-v5-keeper-aware-calibration',
   goals: {
-    primary: 'Acquire an elite RB1 without sacrificing roster balance',
-    secondary: ['Add a quality WR2', 'Add a starting QB at a sensible price'],
+    primary: 'Build strong starting WR value around Bijan Robinson and Brock Bowers',
+    secondary: ['Add a starting QB at a sensible price', 'Add FLEX value', 'Use late cheap picks for keeper upside'],
   },
-  // Tiers are intentionally soft preference priors. They should nudge the
-  // recommendation, not impose a static dollar ceiling that ignores the room.
+  // These are preference priors, not permission to pay above the market-value
+  // anchor. Scarcity can move a player toward full market value, but never make
+  // STRETCH mean "pay a premium just because we like him."
   tierMultipliers: {
-    STRETCH: 1.05,
-    IDEAL: 1.03,
-    FALLBACK: 1.00,
-    VALUE_ONLY: 0.96,
-    AVOID: 0.75,
+    STRETCH: 1.00,
+    IDEAL: 0.98,
+    FALLBACK: 0.94,
+    VALUE_ONLY: 0.88,
+    AVOID: 0.70,
   },
   players: {
     'Bijan Robinson': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
@@ -45,19 +46,20 @@ export const AUCTION_CHEAT_SHEET = {
     'Jaxon Smith-Njigba': { position: 'WR', tier: 'STRETCH', targetRole: 'WR1/WR2' },
     'CeeDee Lamb': { position: 'WR', tier: 'STRETCH', targetRole: 'WR1/WR2' },
 
-    'Drake London': { position: 'WR', tier: 'IDEAL', targetRole: 'WR2' },
-    'Nico Collins': { position: 'WR', tier: 'IDEAL', targetRole: 'WR2' },
-    'Garrett Wilson': { position: 'WR', tier: 'IDEAL', targetRole: 'WR2' },
-    'Rashee Rice': { position: 'WR', tier: 'IDEAL', targetRole: 'WR2' },
-    'A.J. Brown': { position: 'WR', tier: 'IDEAL', targetRole: 'WR2' },
+    'Drake London': { position: 'WR', tier: 'IDEAL', targetRole: 'WR1/WR2' },
+    'Nico Collins': { position: 'WR', tier: 'IDEAL', targetRole: 'WR1/WR2' },
+    'Garrett Wilson': { position: 'WR', tier: 'IDEAL', targetRole: 'WR1/WR2' },
+    'Rashee Rice': { position: 'WR', tier: 'IDEAL', targetRole: 'WR1/WR2' },
+    'A.J. Brown': { position: 'WR', tier: 'IDEAL', targetRole: 'WR1/WR2' },
+    'Chris Olave': { position: 'WR', tier: 'IDEAL', targetRole: 'WR1/WR2' },
 
-    'DeVonta Smith': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
-    'Tetairoa McMillan': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
-    'Emeka Egbuka': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
-    'Zay Flowers': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
-    'Davante Adams': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
-    'Ladd McConkey': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
-    'Jaylen Waddle': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR2/FLEX' },
+    'DeVonta Smith': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
+    'Tetairoa McMillan': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
+    'Emeka Egbuka': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
+    'Zay Flowers': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
+    'Davante Adams': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
+    'Ladd McConkey': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
+    'Jaylen Waddle': { position: 'WR', tier: 'FALLBACK', targetRole: 'WR1/WR2/FLEX' },
 
     'Josh Allen': { position: 'QB', tier: 'STRETCH', targetRole: 'QB1' },
     'Lamar Jackson': { position: 'QB', tier: 'IDEAL', targetRole: 'QB1' },
@@ -174,7 +176,8 @@ function rosterFitSignal({ position, state }) {
     return { multiplier: 0.7, reason: 'multiple RBs are already rostered; additional RB is bench depth' };
   }
   if (position === 'WR') {
-    if (state.wrCount < 2) return { multiplier: 1.03, reason: 'WR2 starter slot is still open' };
+    if (state.wrCount === 0) return { multiplier: 1.05, reason: 'both starting WR slots are still open' };
+    if (state.wrCount === 1) return { multiplier: 1.03, reason: 'one starting WR slot is still open' };
     return { multiplier: 0.82, reason: 'both starting WR slots are filled' };
   }
   if (position === 'QB') {
@@ -191,7 +194,10 @@ function keeperSignal({ player, marketValue, experienceYears, config }) {
   const flier = config?.auctionStrategy?.keeperFlier ?? {};
   const marketCap = Number(flier.maximumMarketValue ?? 25);
   const manualHighUpside = player?.keeperUpside === 'HIGH';
-  const rookie = Number(experienceYears) === 0;
+  const hasExperienceYears = experienceYears !== null
+    && experienceYears !== undefined
+    && Number.isFinite(Number(experienceYears));
+  const rookie = hasExperienceYears && Number(experienceYears) === 0;
   const cheapEnough = Number.isFinite(Number(marketValue)) && Number(marketValue) <= marketCap;
   const eligible = cheapEnough && (manualHighUpside || rookie);
 
@@ -209,7 +215,12 @@ function keeperSignal({ player, marketValue, experienceYears, config }) {
 
 function primaryGoalSignal({ player, state, config }) {
   if (state.eliteRbSecured || player?.eliteRb) {
-    return { open: false, targetReserve: 0, additionalReserve: 0, reason: state.eliteRbSecured ? 'elite RB goal already filled' : 'winning this player fills the elite RB goal' };
+    return {
+      open: false,
+      targetReserve: 0,
+      additionalReserve: 0,
+      reason: state.eliteRbSecured ? 'elite RB goal already filled' : 'winning this player fills the elite RB goal',
+    };
   }
 
   const rbBoard = state.board.RB;
@@ -270,17 +281,21 @@ export function buildCheatSheetContext({
 
   if (primaryGoal.open) reasons.push(`protect $${primaryGoal.targetReserve} total for primary RB1 goal while ${primaryGoal.reason}`);
 
-  if (state.budgetMode === 'PROTECT' && preferenceMultiplier > 1.02) {
-    preferenceMultiplier = 1.02;
-    reasons.push('protect mode limits preference premiums');
+  if (state.budgetMode === 'PROTECT' && preferenceMultiplier > 1) {
+    reasons.push('protect mode prevents paying a preference premium');
   }
+
+  // Preference may discount a player, but it cannot inflate the intrinsic
+  // valuation above the current market-value anchor. Scarcity moves a target
+  // back toward 1.00 rather than above it.
+  preferenceMultiplier = Math.min(1, preferenceMultiplier);
 
   return {
     player,
     state,
     tier: player?.tier ?? 'UNRATED',
     targetRole: player?.targetRole ?? null,
-    preferenceMultiplier: Number(Math.max(0.45, Math.min(1.15, preferenceMultiplier)).toFixed(3)),
+    preferenceMultiplier: Number(Math.max(0.45, preferenceMultiplier).toFixed(3)),
     maximumCheatSheetBid: null,
     rosterFit,
     scarcity,
