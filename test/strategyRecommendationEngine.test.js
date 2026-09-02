@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LEAGUE_CONFIG } from '../src/config.js';
-import { scoreAvailablePlayers } from '../src/strategyRecommendationEngine.js';
+import { recommendPairs, scoreAvailablePlayers } from '../src/strategyRecommendationEngine.js';
 
 const snakePicks = [8, 9, 24, 25, 40, 41, 56, 57, 72, 73, 88, 89, 104, 105, 120, 121, 136, 137];
 
@@ -41,6 +41,20 @@ test('QB2 suppresses upside while QB3 boosts it', () => {
   });
   const qb3 = qb3Board.find((p) => p.id === 2);
   assert.equal(qb3.components.upsideMultiplier, 1.3);
+});
+
+test('QB2 starter need is reduced for lower-quality candidates', () => {
+  const board = scoreAvailablePlayers({
+    players,
+    draftedPicks: [myPick(100, 'Roster QB1', 'QB', 8)],
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    myOverallPicks: snakePicks,
+  });
+  const safe = board.find((p) => p.id === 1);
+  const upside = board.find((p) => p.id === 2);
+  assert.ok(safe.components.qb2QualityMultiplier >= upside.components.qb2QualityMultiplier);
+  assert.ok(upside.components.qb2QualityPenalty >= safe.components.qb2QualityPenalty);
 });
 
 test('RB3/RB4 are upside-chasing roster spots', () => {
@@ -90,6 +104,51 @@ test('fourth QB is not a recommendation candidate', () => {
   assert.equal(board.some((p) => p.position === 'QB'), false);
 });
 
+test('current availability status discounts risky players before AI reranking', () => {
+  const riskPlayers = [
+    { id: 501, name: 'Healthy RB', position: 'RB', projectedPoints: 240, consensusValue: 80, injuryStatus: 'ACTIVE' },
+    { id: 502, name: 'Out RB', position: 'RB', projectedPoints: 240, consensusValue: 80, injuryStatus: 'OUT' },
+  ];
+  const board = scoreAvailablePlayers({
+    players: riskPlayers,
+    draftedPicks: [],
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    myOverallPicks: snakePicks,
+  });
+  const healthy = board.find((p) => p.id === 501);
+  const out = board.find((p) => p.id === 502);
+  assert.equal(healthy.availabilityStatus, 'normal');
+  assert.equal(out.availabilityStatus, 'out');
+  assert.ok(out.draftScore < healthy.draftScore);
+});
+
+test('explicit availability overrides can remove breaking-news risks', () => {
+  const riskPlayers = [
+    { id: 601, name: 'Breaking News RB', position: 'RB', projectedPoints: 260, consensusValue: 90, injuryStatus: 'ACTIVE' },
+    { id: 602, name: 'Healthy RB', position: 'RB', projectedPoints: 230, consensusValue: 75, injuryStatus: 'ACTIVE' },
+  ];
+  const config = {
+    ...LEAGUE_CONFIG,
+    strategy: {
+      ...LEAGUE_CONFIG.strategy,
+      playerAvailability: {
+        ...LEAGUE_CONFIG.strategy.playerAvailability,
+        overrides: { '601': { status: 'suspended', reason: 'breaking news test' } },
+      },
+    },
+  };
+  const board = scoreAvailablePlayers({
+    players: riskPlayers,
+    draftedPicks: [],
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config,
+    myOverallPicks: snakePicks,
+  });
+  assert.equal(board.some((p) => p.id === 601), false);
+  assert.equal(board.some((p) => p.id === 602), true);
+});
+
 test('RB WR and TE cannot duplicate the same NFL team at the same position', () => {
   const teamPlayers = [
     { id: 201, name: 'ATL RB Two', position: 'RB', nflTeam: 'ATL', projectedPoints: 245, consensusValue: 82, seasonOutlook: 'steady role' },
@@ -132,4 +191,34 @@ test('cross-position same-team combinations remain eligible', () => {
 
   assert.equal(board.some((p) => p.id === 401), true);
   assert.equal(board.some((p) => p.id === 402), true);
+});
+
+test('filling QB2 on the first pick blocks an ordinary QB3 on the same early turn', () => {
+  const pairPlayers = [
+    { id: 701, name: 'QB Starter A', position: 'QB', projectedPoints: 410, consensusValue: 84, seasonOutlook: 'safe veteran starter' },
+    { id: 702, name: 'QB Starter B', position: 'QB', projectedPoints: 395, consensusValue: 82, seasonOutlook: 'safe veteran starter' },
+    { id: 703, name: 'RB Depth', position: 'RB', projectedPoints: 235, consensusValue: 78, seasonOutlook: 'upside starting role' },
+    { id: 704, name: 'WR Depth', position: 'WR', projectedPoints: 205, consensusValue: 78, seasonOutlook: 'upside starting role' },
+  ];
+  const draftedPicks = [
+    myPick(700, 'Roster QB1', 'QB', 25),
+    { playerId: 799, playerName: 'Opponent Pick', position: 'WR', overallPick: 55, fantasyTeam: 'Opponent' },
+  ];
+  const board = scoreAvailablePlayers({
+    players: pairPlayers,
+    draftedPicks,
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    myOverallPicks: snakePicks,
+  });
+  const pairs = recommendPairs({
+    scoredPlayers: board,
+    players: pairPlayers,
+    draftedPicks,
+    myTeamName: LEAGUE_CONFIG.myTeamName,
+    config: LEAGUE_CONFIG,
+    myOverallPicks: snakePicks,
+  });
+  assert.ok(pairs.some((pair) => pair.first.position === 'QB'));
+  assert.equal(pairs.some((pair) => pair.first.position === 'QB' && pair.second.position === 'QB'), false);
 });
