@@ -128,6 +128,9 @@ export function recommendBid({
   const hasMarketValue = Number.isFinite(marketValue) && marketValue >= config.minimumBid;
   const currentBid = Number(nomination.currentBid);
   const hasCurrentBid = Number.isFinite(currentBid) && currentBid >= 0;
+  const hasExperienceYears = nomination.experienceYears !== null
+    && nomination.experienceYears !== undefined
+    && Number.isFinite(Number(nomination.experienceYears));
 
   const role = atPositionLimit ? 'FULL' : candidateRole(position, currentRoster, config);
   const hypotheticalRoster = atPositionLimit
@@ -151,7 +154,7 @@ export function recommendBid({
     remainingBudget: budget.remainingBudget,
     sales,
     marketValue: hasMarketValue ? marketValue : null,
-    experienceYears: nomination.experienceYears ?? null,
+    experienceYears: hasExperienceYears ? Number(nomination.experienceYears) : null,
     config,
   });
 
@@ -196,6 +199,11 @@ export function recommendBid({
     : null;
   const hasBackupRoleCap = Number.isFinite(backupRoleCap) && backupRoleCap >= config.minimumBid;
 
+  // Until we have a separately calibrated GOP intrinsic-value model, the ESPN
+  // market value is an anchor, not something preference tiers are allowed to
+  // exceed. This prevents a "stretch" label from turning $108 into $117.
+  const intrinsicMarketCap = hasMarketValue ? marketValue : Number.POSITIVE_INFINITY;
+
   const buyAtOrBelow = atPositionLimit
     ? 0
     : Math.max(
@@ -204,6 +212,7 @@ export function recommendBid({
           budget.maximumLegalBid,
           strategicMaximumBid,
           marketAwareValue,
+          intrinsicMarketCap,
           hasBackupRoleCap ? backupRoleCap : Number.POSITIVE_INFINITY,
           keeperFlierCapApplies ? keeperFlierMaximumBid : Number.POSITIVE_INFINITY,
         ),
@@ -225,7 +234,7 @@ export function recommendBid({
     marketValue: hasMarketValue ? marketValue : null,
     marketValueSource: nomination.marketValueSource ?? (hasMarketValue ? 'espn-practice' : null),
     projectedPoints: Number.isFinite(Number(nomination.projectedPoints)) ? Number(nomination.projectedPoints) : null,
-    experienceYears: Number.isFinite(Number(nomination.experienceYears)) ? Number(nomination.experienceYears) : null,
+    experienceYears: hasExperienceYears ? Number(nomination.experienceYears) : null,
     role,
     positionHave: position ? (currentCounts[position] ?? 0) : null,
     positionLimit: Number.isFinite(positionLimit) ? positionLimit : null,
@@ -243,6 +252,7 @@ export function recommendBid({
     primaryGoalSignal: cheatSheetContext?.primaryGoal ?? null,
     backupRoleCap: hasBackupRoleCap ? backupRoleCap : null,
     intrinsicPreferredValue,
+    intrinsicMarketCap: hasMarketValue ? marketValue : null,
     expectedClearingValue,
     marketPressureFactor: pressureFactor,
     marketAwareValue,
