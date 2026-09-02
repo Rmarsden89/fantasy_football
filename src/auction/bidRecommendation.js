@@ -39,6 +39,10 @@ function candidateRole(position, players, config) {
   const requirements = baseStarterRequirements(config);
   if ((counts[position] ?? 0) < (requirements[position] ?? 0)) return 'STARTER';
 
+  // With Bowers locked in at TE1, a second TE is an injury/bye-week safety net,
+  // not a FLEX target. Keep TE2 in bench economics even while FLEX is open.
+  if (position === 'TE' && (counts.TE ?? 0) >= (requirements.TE ?? 0)) return 'BENCH';
+
   const flexPositions = config.auctionStrategy?.flexPositions ?? ['RB', 'WR', 'TE'];
   if (flexPositions.includes(position) && !flexFilled(counts, config)) return 'FLEX';
   return 'BENCH';
