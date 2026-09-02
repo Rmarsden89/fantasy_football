@@ -9,8 +9,8 @@ export const AUCTION_LEAGUE_CONFIG = {
   keeperCount: 2,
   minimumBid: 1,
   myKeepers: [
+    { playerName: 'Bijan Robinson', position: 'RB', price: 90 },
     { playerName: 'Brock Bowers', position: 'TE', price: 28 },
-    { playerName: 'Chris Olave', position: 'WR', price: 25 },
   ],
   roster: {
     QB: 1,
