@@ -11,6 +11,11 @@ export const AUCTION_CHEAT_SHEET = {
     VALUE_ONLY: 0.88,
     AVOID: 0.65,
   },
+  maxRemainingBudgetShare: {
+    RB: { STRETCH: 0.50, IDEAL: 0.45, FALLBACK: 0.36, VALUE_ONLY: 0.25, AVOID: 0.12 },
+    WR: { STRETCH: 0.38, IDEAL: 0.31, FALLBACK: 0.24, VALUE_ONLY: 0.18, AVOID: 0.10 },
+    QB: { STRETCH: 0.30, IDEAL: 0.22, FALLBACK: 0.16, VALUE_ONLY: 0.12, AVOID: 0.08 },
+  },
   players: {
     // Elite-RB chase. These are preference tiers, not fixed dollar values.
     'Jahmyr Gibbs': { position: 'RB', tier: 'STRETCH', targetRole: 'RB1', eliteRb: true },
@@ -105,7 +110,9 @@ export function buildCheatSheetContext({ playerName, position, roster = [], rema
       player: null,
       state,
       tier: 'UNRATED',
+      targetRole: null,
       preferenceMultiplier: 1,
+      maximumCheatSheetBid: null,
       reason: 'Player is not yet explicitly rated on the cheat sheet.',
     };
   }
@@ -141,12 +148,22 @@ export function buildCheatSheetContext({ playerName, position, roster = [], rema
     reasons.push('remaining budget is in protect mode, so stretch premium is disabled');
   }
 
+  const share = Number(AUCTION_CHEAT_SHEET.maxRemainingBudgetShare?.[position]?.[player.tier]);
+  const maximumCheatSheetBid = Number.isFinite(share)
+    ? Math.max(1, Math.floor(remainingBudget * share))
+    : null;
+
+  if (Number.isFinite(maximumCheatSheetBid)) {
+    reasons.push(`cheat-sheet budget guardrail is $${maximumCheatSheetBid}`);
+  }
+
   return {
     player,
     state,
     tier: player.tier,
     targetRole: player.targetRole,
     preferenceMultiplier: Number(Math.max(0.5, Math.min(1.15, preferenceMultiplier)).toFixed(3)),
+    maximumCheatSheetBid,
     reason: reasons.join('; '),
   };
 }
