@@ -34,9 +34,9 @@ export const AUCTION_LEAGUE_CONFIG = {
   },
   auctionStrategy: {
     starterReserve: {
-      QB: [32],
+      QB: [24],
       RB: [28],
-      WR: [28, 18],
+      WR: [38, 26],
       TE: [18],
       DP: [2],
       DST: [1],
@@ -49,15 +49,27 @@ export const AUCTION_LEAGUE_CONFIG = {
       FLEX: 0.85,
       BENCH: 0.35,
     },
-    // Bowers already fills TE1. TE2 is a low-cost injury/bye-week safety net,
-    // not a position where we want meaningful discretionary spend.
+    // Once a strong starter is secured, backup QB/TE should be cheap insurance.
+    // In this league the opportunity cost of a $6 QB2 is more important than
+    // squeezing a few extra projected QB points out of the bench.
     backupRoleCaps: {
+      QB: 2,
       TE: 5,
     },
+    quarterback: {
+      // While both WR starters are open, a QB cannot consume more than 28% of
+      // the remaining auction budget. With one WR secured that rises to 35%.
+      // Once both WR starters are filled, normal value/budget rules take over.
+      maxBudgetShareWithZeroWr: 0.28,
+      maxBudgetShareWithOneWr: 0.35,
+    },
+    idp: {
+      // Only one DP starter: target an impact player, but do not let IDP spend
+      // compete with the offensive core.
+      preferredMaximumBid: 4,
+      fallbackMaximumBid: 2,
+    },
     keeperFlier: {
-      // Cheap rookies can carry asymmetric value because next year's keeper
-      // salary is only the purchase price + $10. Keep this intentionally small
-      // so keeper upside never steals starter money.
       maximumBid: 8,
       maximumMarketValue: 25,
       rookiePreferenceBonus: 0.08,
