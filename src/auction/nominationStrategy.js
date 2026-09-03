@@ -41,16 +41,10 @@ function rosterNeedScore(position, counts) {
     return 8;
   }
   if (position === 'QB') {
-    if ((counts.QB ?? 0) === 0) {
-      // WR is the primary allocation goal around Bijan/Bowers, so QB is useful
-      // but should not outrank an open starting-WR target early.
-      return (counts.WR ?? 0) < 2 ? 18 : 30;
-    }
+    if ((counts.QB ?? 0) === 0) return (counts.WR ?? 0) < 2 ? 18 : 30;
     return -30;
   }
-  if (position === 'RB') {
-    return (counts.RB ?? 0) < 2 ? 12 : 2;
-  }
+  if (position === 'RB') return (counts.RB ?? 0) < 2 ? 12 : 2;
   if (position === 'TE') return -30;
   if (isIndividualDefensivePosition(position)) return (counts.DP ?? 0) < 1 ? 12 : -20;
   if (position === 'DST') return 4;
@@ -58,41 +52,21 @@ function rosterNeedScore(position, counts) {
   return 0;
 }
 
-// Nomination recommendations are acquisition recommendations first. A $0 ESPN
-// value is not a bargain signal: it means the room may simply let us have the
-// player for $1. That can be useful in the endgame, but it should not cause an
-// unrated player to become our preferred opening nomination.
-function acquisitionValueScore(player, cheat) {
+function valueScore(player) {
   const value = Number(player?.auctionValueAverage);
-  const keeperUpside = cheat?.keeperUpside === 'HIGH';
-
-  if (!Number.isFinite(value)) return -4;
-  if (value <= 0) return keeperUpside ? -6 : -30;
-  if (value <= 5) return keeperUpside ? 2 : -8;
+  if (!Number.isFinite(value)) return 0;
+  if (value === 0) return -24;
+  if (value <= 5) return -6;
   if (value <= 15) return 0;
-  if (value <= 30) return 3;
-  if (value <= 60) return 6;
-  return 8;
+  if (value <= 30) return 6;
+  if (value <= 60) return 10;
+  return 14;
 }
 
 function projectedScore(player) {
   const points = Number(player?.projectedPoints);
   if (!Number.isFinite(points) || points <= 0) return 0;
   return Math.min(10, points / 40);
-}
-
-function starterAcquisitionPenalty({ player, cheat, counts }) {
-  const starterNeedOpen = (counts.WR ?? 0) < 2 || (counts.QB ?? 0) < 1;
-  if (!starterNeedOpen) return 0;
-
-  const value = Number(player?.auctionValueAverage);
-  const isOffensiveSkill = ['QB', 'RB', 'WR', 'TE'].includes(player?.position);
-
-  // While core starter needs remain, do not let a $0/$1-ish unrated offensive
-  // player outrank legitimate starter targets purely because his projection is
-  // respectable. Cheap fliers become appropriate later in the draft.
-  if (isOffensiveSkill && !cheat && Number.isFinite(value) && value <= 5) return -18;
-  return 0;
 }
 
 export function recommendNomination({
@@ -103,11 +77,27 @@ export function recommendNomination({
   limit = 5,
 } = {}) {
   const counts = rosterCounts(roster);
+
+  // The current nomination ranker is experimental and is intentionally kept
+  // out of normal draft operation until it is redesigned around explicit
+  // auction intent (acquire vs price-discovery vs draining opponent budgets).
+  // The bidding model remains active and independent.
+  if (config?.auctionStrategy?.nomination?.enabled !== true) {
+    return {
+      primary: null,
+      alternatives: [],
+      rosterCounts: counts,
+      disabled: true,
+      reason: 'experimental nomination recommendations disabled',
+    };
+  }
+
   const unavailable = unavailableNames({
     sales,
     roster,
     keepers: config?.myKeepers ?? [],
   });
+  const coreStarterNeedOpen = (counts.WR ?? 0) < 2 || (counts.QB ?? 0) < 1;
 
   const candidates = playerPool
     .filter((player) => player?.name && !unavailable.has(normalizeName(player.name)))
@@ -118,17 +108,15 @@ export function recommendNomination({
       const need = rosterNeedScore(player.position, counts);
       const preference = tierScore(cheat?.tier);
       const idpBonus = idp ? Math.round(idp.priority / 10) : 0;
-      const acquisitionValue = acquisitionValueScore(player, cheat);
-      const cheapStarterPenalty = starterAcquisitionPenalty({ player, cheat, counts });
-      const score = need
-        + preference
-        + idpBonus
-        + acquisitionValue
-        + projectedScore(player)
-        + cheapStarterPenalty;
-
-      const auctionAverage = Number(player.auctionValueAverage);
-      const zeroValue = Number.isFinite(auctionAverage) && auctionAverage <= 0;
+      const auctionValue = Number(player.auctionValueAverage);
+      const cheapUnratedPenalty = coreStarterNeedOpen
+        && ['QB', 'RB', 'WR', 'TE'].includes(player.position)
+        && !cheat
+        && Number.isFinite(auctionValue)
+        && auctionValue <= 5
+        ? -20
+        : 0;
+      const score = need + preference + idpBonus + valueScore(player) + projectedScore(player) + cheapUnratedPenalty;
 
       return {
         playerName: player.name,
@@ -139,15 +127,11 @@ export function recommendNomination({
         idpTier: idp?.tier ?? null,
         projectedPoints: player.projectedPoints ?? null,
         espnAuctionAverage: player.auctionValueAverage ?? null,
-        nominationIntent: 'ACQUIRE',
         reason: [
           need > 20 ? 'fills a high-priority open starter need' : null,
           cheat ? `${cheat.tier} pre-draft target` : null,
           idp ? `IDP target tier ${idp.tier}` : null,
-          zeroValue ? 'ESPN $0 value is an endgame/flier signal, not an opening-target bonus' : null,
-          Number.isFinite(auctionAverage) && auctionAverage > 0 && auctionAverage <= 15
-            ? 'affordable acquisition target'
-            : null,
+          Number(player.auctionValueAverage) >= 16 ? 'meaningful current auction value' : null,
         ].filter(Boolean).join('; '),
       };
     })
@@ -157,5 +141,6 @@ export function recommendNomination({
     primary: candidates[0] ?? null,
     alternatives: candidates.slice(1, Math.max(1, limit)),
     rosterCounts: counts,
+    disabled: false,
   };
 }
