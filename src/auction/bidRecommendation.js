@@ -3,6 +3,7 @@ import { buildCheatSheetContext } from './cheatSheet.js';
 import { getIdpTarget, isIndividualDefensivePosition } from './idpTargets.js';
 import { buildMarketContext } from './marketContext.js';
 import { getMaximumBid } from './marketMath.js';
+import { buildPositionScarcitySignal } from './positionScarcity.js';
 
 function positionCounts(players = []) {
   return players.reduce((counts, player) => {
@@ -191,13 +192,24 @@ export function recommendBid({
     config,
   });
 
+  const livePositionScarcity = buildPositionScarcitySignal({
+    position,
+    roster: currentRoster,
+    sales,
+    playerPool,
+    config,
+  });
+
   const primaryGoalAdditionalReserve = Number(cheatSheetContext?.primaryGoal?.additionalReserve ?? 0);
   const strategicReserveAfterWin = baseStrategicReserveAfterWin + Math.max(0, primaryGoalAdditionalReserve);
   const strategicMaximumBid = atPositionLimit
     ? 0
     : Math.max(0, budget.remainingBudget - strategicReserveAfterWin);
 
-  const preferenceMultiplier = Number(cheatSheetContext?.preferenceMultiplier ?? 1);
+  const basePreferenceMultiplier = Number(cheatSheetContext?.preferenceMultiplier ?? 1);
+  const preferenceMultiplier = livePositionScarcity.active
+    ? Math.max(basePreferenceMultiplier, Number(livePositionScarcity.preferenceFloor ?? 0))
+    : basePreferenceMultiplier;
   let intrinsicPreferredValue = hasMarketValue
     ? Math.max(config.minimumBid, Math.floor(roleAdjustedMarketValue * preferenceMultiplier))
     : null;
@@ -283,11 +295,13 @@ export function recommendBid({
     cheatSheetTier: cheatSheetContext?.tier ?? 'UNRATED',
     cheatSheetTargetRole: cheatSheetContext?.targetRole ?? null,
     cheatSheetPreferenceMultiplier: preferenceMultiplier,
+    baseCheatSheetPreferenceMultiplier: basePreferenceMultiplier,
     cheatSheetMaximumBid: null,
     cheatSheetReason: cheatSheetContext?.reason ?? null,
     cheatSheetState: cheatSheetContext?.state ?? null,
     rosterFitSignal: cheatSheetContext?.rosterFit ?? null,
     tierScarcitySignal: cheatSheetContext?.scarcity ?? null,
+    livePositionScarcity,
     keeperSignal: cheatSheetContext?.keeper ?? null,
     keeperFlierCap: keeperFlierCapApplies ? keeperFlierMaximumBid : null,
     primaryGoalSignal: cheatSheetContext?.primaryGoal ?? null,
