@@ -1,5 +1,6 @@
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
 import { buildCheatSheetContext } from './cheatSheet.js';
+import { getIdpTarget, isIndividualDefensivePosition } from './idpTargets.js';
 import { buildMarketContext } from './marketContext.js';
 import { getMaximumBid } from './marketMath.js';
 
@@ -8,8 +9,15 @@ function positionCounts(players = []) {
     const position = player?.position;
     if (!position) return counts;
     counts[position] = (counts[position] ?? 0) + 1;
+    if (isIndividualDefensivePosition(position)) {
+      counts.DP = (counts.DP ?? 0) + 1;
+    }
     return counts;
   }, {});
+}
+
+function rosterSlotForPosition(position) {
+  return isIndividualDefensivePosition(position) ? 'DP' : position;
 }
 
 function baseStarterRequirements(config) {
@@ -37,7 +45,8 @@ function flexFilled(counts, config) {
 function candidateRole(position, players, config) {
   const counts = positionCounts(players);
   const requirements = baseStarterRequirements(config);
-  if ((counts[position] ?? 0) < (requirements[position] ?? 0)) return 'STARTER';
+  const slot = rosterSlotForPosition(position);
+  if ((counts[slot] ?? 0) < (requirements[slot] ?? 0)) return 'STARTER';
 
   if (position === 'TE' && (counts.TE ?? 0) >= (requirements.TE ?? 0)) return 'BENCH';
 
@@ -80,6 +89,29 @@ function clearingBuffer(value, config) {
   return Math.max(minBuffer, Math.min(maxBuffer, Math.ceil(value * pct)));
 }
 
+function quarterbackOpportunityCap({ position, role, counts, remainingBudget, config }) {
+  if (position !== 'QB' || role !== 'STARTER') return Number.POSITIVE_INFINITY;
+  const wrCount = counts.WR ?? 0;
+  const qb = config.auctionStrategy?.quarterback ?? {};
+  if (wrCount === 0) {
+    return Math.floor(remainingBudget * Number(qb.maxBudgetShareWithZeroWr ?? 1));
+  }
+  if (wrCount === 1) {
+    return Math.floor(remainingBudget * Number(qb.maxBudgetShareWithOneWr ?? 1));
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function idpOpportunityCap({ playerName, position, role, config }) {
+  if (!isIndividualDefensivePosition(position)) return Number.POSITIVE_INFINITY;
+  if (role !== 'STARTER') return config.minimumBid;
+  const idpTarget = getIdpTarget(playerName);
+  const idpConfig = config.auctionStrategy?.idp ?? {};
+  return idpTarget
+    ? Number(idpConfig.preferredMaximumBid ?? 4)
+    : Number(idpConfig.fallbackMaximumBid ?? 2);
+}
+
 export function buildMyBudgetState({
   purchases = [],
   config = AUCTION_LEAGUE_CONFIG,
@@ -120,6 +152,7 @@ export function recommendBid({
   const budget = buildMyBudgetState({ purchases, config });
   const currentRoster = budget.roster;
   const position = nomination.position ?? null;
+  const rosterSlot = rosterSlotForPosition(position);
   const currentCounts = positionCounts(currentRoster);
   const positionLimit = position ? config.positionLimits?.[position] : null;
   const atPositionLimit = Number.isFinite(positionLimit) && (currentCounts[position] ?? 0) >= positionLimit;
@@ -198,11 +231,16 @@ export function recommendBid({
     ? Number(config.auctionStrategy?.backupRoleCaps?.[position])
     : null;
   const hasBackupRoleCap = Number.isFinite(backupRoleCap) && backupRoleCap >= config.minimumBid;
-
-  // Until we have a separately calibrated GOP intrinsic-value model, the ESPN
-  // market value is an anchor, not something preference tiers are allowed to
-  // exceed. This prevents a "stretch" label from turning $108 into $117.
   const intrinsicMarketCap = hasMarketValue ? marketValue : Number.POSITIVE_INFINITY;
+  const qbOpportunityCap = quarterbackOpportunityCap({
+    position,
+    role,
+    counts: currentCounts,
+    remainingBudget: budget.remainingBudget,
+    config,
+  });
+  const idpCap = idpOpportunityCap({ playerName: nomination.playerName, position, role, config });
+  const idpTarget = getIdpTarget(nomination.playerName);
 
   const buyAtOrBelow = atPositionLimit
     ? 0
@@ -213,6 +251,8 @@ export function recommendBid({
           strategicMaximumBid,
           marketAwareValue,
           intrinsicMarketCap,
+          qbOpportunityCap,
+          idpCap,
           hasBackupRoleCap ? backupRoleCap : Number.POSITIVE_INFINITY,
           keeperFlierCapApplies ? keeperFlierMaximumBid : Number.POSITIVE_INFINITY,
         ),
@@ -230,13 +270,14 @@ export function recommendBid({
     playerName: nomination.playerName,
     nflTeam: nomination.nflTeam ?? null,
     position,
+    rosterSlot,
     currentBid: hasCurrentBid ? currentBid : null,
     marketValue: hasMarketValue ? marketValue : null,
     marketValueSource: nomination.marketValueSource ?? (hasMarketValue ? 'espn-practice' : null),
     projectedPoints: Number.isFinite(Number(nomination.projectedPoints)) ? Number(nomination.projectedPoints) : null,
     experienceYears: hasExperienceYears ? Number(nomination.experienceYears) : null,
     role,
-    positionHave: position ? (currentCounts[position] ?? 0) : null,
+    positionHave: rosterSlot ? (currentCounts[rosterSlot] ?? 0) : null,
     positionLimit: Number.isFinite(positionLimit) ? positionLimit : null,
     roleAdjustedMarketValue,
     cheatSheetTier: cheatSheetContext?.tier ?? 'UNRATED',
@@ -251,6 +292,9 @@ export function recommendBid({
     keeperFlierCap: keeperFlierCapApplies ? keeperFlierMaximumBid : null,
     primaryGoalSignal: cheatSheetContext?.primaryGoal ?? null,
     backupRoleCap: hasBackupRoleCap ? backupRoleCap : null,
+    quarterbackOpportunityCap: Number.isFinite(qbOpportunityCap) ? qbOpportunityCap : null,
+    idpTarget,
+    idpOpportunityCap: Number.isFinite(idpCap) ? idpCap : null,
     intrinsicPreferredValue,
     intrinsicMarketCap: hasMarketValue ? marketValue : null,
     expectedClearingValue,
