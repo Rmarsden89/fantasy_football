@@ -1,13 +1,15 @@
 import { fetchEspnPlayerPool } from '../espnPlayerPool.js';
 import { AUCTION_LEAGUE_CONFIG, getActiveRosterSize } from './config.js';
 import { AUCTION_CHEAT_SHEET } from './cheatSheet.js';
+import { IDP_TARGETS } from './idpTargets.js';
 import { createAutoBidController } from './autoBidController.js';
 import { createEspnAuctionWatcher } from './espnAuctionWatcher.js';
 import { createNominationWatcher } from './nominationWatcher.js';
+import { recommendNomination } from './nominationStrategy.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.7.0-dynamic-strategy-signals';
+const HELPER_VERSION = '0.8.0-nomination-idp-allocation';
 
 function normalizeName(value = '') {
   return String(value).trim().toLowerCase();
@@ -72,13 +74,17 @@ function printRecommendation(recommendation) {
   console.table([{
     player: recommendation.playerName,
     position: recommendation.position,
+    rosterSlot: recommendation.rosterSlot,
     rosterRole: recommendation.role,
     cheatTier: recommendation.cheatSheetTier,
     targetRole: recommendation.cheatSheetTargetRole,
     preference: recommendation.cheatSheetPreferenceMultiplier,
     tierUrgency: recommendation.tierScarcitySignal?.urgency ?? null,
+    idpTier: recommendation.idpTarget?.tier ?? null,
     keeperFlier: recommendation.keeperSignal?.eligible ?? false,
     backupCap: recommendation.backupRoleCap,
+    qbOpportunityCap: recommendation.quarterbackOpportunityCap,
+    idpOpportunityCap: recommendation.idpOpportunityCap,
     bidWhenNominated: recommendation.currentBid,
     espnValue: recommendation.marketValue,
     roleAdjustedValue: recommendation.roleAdjustedMarketValue,
@@ -116,6 +122,14 @@ function printRecommendation(recommendation) {
     + 'This ceiling is fixed for the nomination and will not move with live bids.',
   );
   if (recommendation.cheatSheetReason) console.log(`Strategy signals: ${recommendation.cheatSheetReason}`);
+  console.groupEnd();
+}
+
+function printNominationSuggestion(suggestion) {
+  if (!suggestion?.primary) return;
+  console.group(`🎯 NOMINATE: ${suggestion.primary.playerName} — ${suggestion.primary.position}`);
+  console.table([suggestion.primary, ...(suggestion.alternatives ?? [])]);
+  if (suggestion.primary.reason) console.log(`Why: ${suggestion.primary.reason}`);
   console.groupEnd();
 }
 
@@ -178,6 +192,7 @@ export function startAuctionPracticeHelper({
   let latest = { sales: [], teams: [], myBudget: buildMyBudgetState({ config }) };
   let latestNomination = null;
   let latestRecommendation = null;
+  let latestNominationSuggestion = null;
   let playerPool = [];
   let playerPoolStatus = 'loading';
   const sessionLog = [];
@@ -188,6 +203,17 @@ export function startAuctionPracticeHelper({
       type,
       payload,
     });
+  }
+
+  function buildNominationSuggestion(sales = watcher?.getSales?.() ?? []) {
+    if (!playerPool.length) return null;
+    latestNominationSuggestion = recommendNomination({
+      playerPool,
+      sales,
+      roster: buildMyBudgetState({ purchases: myPurchases(sales, config), config }).roster,
+      config,
+    });
+    return latestNominationSuggestion;
   }
 
   function enrichNomination(nomination) {
@@ -222,6 +248,8 @@ export function startAuctionPracticeHelper({
     onSale: (sale, sales) => {
       latest = printState(sales, config);
       logEvent('sale', sale);
+      const suggestion = buildNominationSuggestion(sales);
+      if (suggestion) logEvent('nomination-suggestion', suggestion);
     },
   });
 
@@ -261,18 +289,24 @@ export function startAuctionPracticeHelper({
       playerPool = pool;
       playerPoolStatus = 'loaded';
       logEvent('player-pool-loaded', { count: pool.length });
-      console.log(`Auction player pool loaded: ${pool.length} players available for supply and keeper-flier analysis.`);
+      console.log(`Auction player pool loaded: ${pool.length} players available for offense, IDP, supply, keeper-flier, and nomination analysis.`);
+      const suggestion = buildNominationSuggestion(watcher.getSales());
+      if (suggestion) {
+        logEvent('nomination-suggestion', suggestion);
+        printNominationSuggestion(suggestion);
+      }
     })
     .catch((error) => {
       playerPoolStatus = 'error';
       logEvent('player-pool-error', { message: String(error?.message ?? error) });
-      console.warn('Auction player pool could not be loaded; recommendations will use opponent demand without supply/rookie enrichment.', error);
+      console.warn('Auction player pool could not be loaded; recommendations will use opponent demand without supply/rookie/nomination enrichment.', error);
     });
 
   logEvent('session-start', {
     version: HELPER_VERSION,
     config,
     cheatSheetVersion: AUCTION_CHEAT_SHEET.version,
+    idpTargetVersion: IDP_TARGETS.version,
     autoBidEnabled: Boolean(autoBid),
     myBudget: latest.myBudget,
   });
@@ -281,12 +315,19 @@ export function startAuctionPracticeHelper({
     version: HELPER_VERSION,
     config,
     cheatSheet: AUCTION_CHEAT_SHEET,
+    idpTargets: IDP_TARGETS,
     watcher,
     nominationWatcher,
     autoBidController,
     getState: () => latest,
     getNomination: () => latestNomination,
     getRecommendation: () => latestRecommendation,
+    getNominationRecommendation: () => buildNominationSuggestion(watcher.getSales()),
+    printNominationRecommendation: () => {
+      const suggestion = buildNominationSuggestion(watcher.getSales());
+      printNominationSuggestion(suggestion);
+      return suggestion;
+    },
     getLogs: () => [...sessionLog],
     getPlayerPoolStatus: () => ({ status: playerPoolStatus, count: playerPool.length }),
     getAutoBidState: () => autoBidController.getState(),
@@ -310,6 +351,7 @@ export function startAuctionPracticeHelper({
         version: HELPER_VERSION,
         config,
         cheatSheet: AUCTION_CHEAT_SHEET,
+        idpTargets: IDP_TARGETS,
         sales: watcher.getSales(),
         state: printState(watcher.getSales(), config),
         playerPoolStatus: { status: playerPoolStatus, count: playerPool.length },
@@ -319,6 +361,7 @@ export function startAuctionPracticeHelper({
         },
         nomination: latestNomination,
         recommendation: latestRecommendation,
+        nominationRecommendation: buildNominationSuggestion(watcher.getSales()),
         events: [...sessionLog],
       };
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -342,9 +385,11 @@ if (typeof window !== 'undefined') {
     version: HELPER_VERSION,
     config: AUCTION_LEAGUE_CONFIG,
     cheatSheet: AUCTION_CHEAT_SHEET,
+    idpTargets: IDP_TARGETS,
     buildAuctionState,
     buildMyBudgetState,
     recommendBid,
+    recommendNomination,
     start: startAuctionPracticeHelper,
   };
 
