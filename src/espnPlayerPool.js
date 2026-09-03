@@ -6,6 +6,11 @@ const POSITION_BY_DEFAULT_ID = {
   3: 'WR',
   4: 'TE',
   5: 'K',
+  9: 'DT',
+  10: 'DE',
+  11: 'LB',
+  12: 'CB',
+  13: 'S',
   16: 'DST',
 };
 
@@ -68,9 +73,6 @@ export function isDraftEligiblePlayer(player) {
   if (!player?.position) return false;
   if (player.active === false) return false;
 
-  // ESPN can retain projections for free agents after they leave an NFL roster.
-  // D/ST entries are team entities, while individual players must currently map
-  // to an NFL proTeamId greater than zero.
   if (player.position !== 'DST' && !(Number(player.nflTeamId) > 0)) return false;
 
   return true;
@@ -95,7 +97,9 @@ export async function fetchEspnPlayerPool({
 
   const fantasyFilter = {
     players: {
-      filterSlotIds: { value: [0, 2, 4, 6, 16, 17, 23] },
+      // DP (15) is included so the browser pool contains IDP candidates in
+      // addition to the offensive/FLEX/K/DST positions used by the snake tool.
+      filterSlotIds: { value: [0, 2, 4, 6, 15, 16, 17, 23] },
       limit,
       sortPercOwned: {
         sortPriority: 1,
