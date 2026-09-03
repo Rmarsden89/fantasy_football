@@ -9,7 +9,7 @@ import { recommendNomination } from './nominationStrategy.js';
 import { buildMyBudgetState, recommendBid } from './bidRecommendation.js';
 import { getDiscretionaryBudget, getMaximumBid } from './marketMath.js';
 
-const HELPER_VERSION = '0.8.0-nomination-idp-allocation';
+const HELPER_VERSION = '0.8.1-auto-nomination-suggestions';
 
 function normalizeName(value = '') {
   return String(value).trim().toLowerCase();
@@ -188,6 +188,7 @@ function downloadJson(filename, value) {
 export function startAuctionPracticeHelper({
   config = AUCTION_LEAGUE_CONFIG,
   autoBid = false,
+  autoNominationSuggestions = autoBid,
 } = {}) {
   let latest = { sales: [], teams: [], myBudget: buildMyBudgetState({ config }) };
   let latestNomination = null;
@@ -214,6 +215,17 @@ export function startAuctionPracticeHelper({
       config,
     });
     return latestNominationSuggestion;
+  }
+
+  function updateNominationSuggestion(sales, { print = false, source = 'refresh' } = {}) {
+    const suggestion = buildNominationSuggestion(sales);
+    if (!suggestion) return null;
+    logEvent('nomination-suggestion', {
+      source,
+      ...suggestion,
+    });
+    if (print) printNominationSuggestion(suggestion);
+    return suggestion;
   }
 
   function enrichNomination(nomination) {
@@ -248,8 +260,10 @@ export function startAuctionPracticeHelper({
     onSale: (sale, sales) => {
       latest = printState(sales, config);
       logEvent('sale', sale);
-      const suggestion = buildNominationSuggestion(sales);
-      if (suggestion) logEvent('nomination-suggestion', suggestion);
+      updateNominationSuggestion(sales, {
+        print: Boolean(autoNominationSuggestions),
+        source: 'post-sale',
+      });
     },
   });
 
@@ -283,6 +297,11 @@ export function startAuctionPracticeHelper({
       '🤖 PRACTICE AUTO-BID ENABLED. The helper will place incremental $1 bids up to each fixed recommendation ceiling and stop when already winning or the ceiling is reached.',
     );
   }
+  if (autoNominationSuggestions) {
+    console.warn(
+      '🎯 AUTO NOMINATION SUGGESTIONS ENABLED. The helper will recalculate and print the current nomination target after every completed sale. It does not click ESPN nomination controls.',
+    );
+  }
 
   fetchEspnPlayerPool({ leagueId: config.leagueId, season: config.season })
     .then((pool) => {
@@ -290,11 +309,10 @@ export function startAuctionPracticeHelper({
       playerPoolStatus = 'loaded';
       logEvent('player-pool-loaded', { count: pool.length });
       console.log(`Auction player pool loaded: ${pool.length} players available for offense, IDP, supply, keeper-flier, and nomination analysis.`);
-      const suggestion = buildNominationSuggestion(watcher.getSales());
-      if (suggestion) {
-        logEvent('nomination-suggestion', suggestion);
-        printNominationSuggestion(suggestion);
-      }
+      updateNominationSuggestion(watcher.getSales(), {
+        print: true,
+        source: 'player-pool-loaded',
+      });
     })
     .catch((error) => {
       playerPoolStatus = 'error';
@@ -308,6 +326,7 @@ export function startAuctionPracticeHelper({
     cheatSheetVersion: AUCTION_CHEAT_SHEET.version,
     idpTargetVersion: IDP_TARGETS.version,
     autoBidEnabled: Boolean(autoBid),
+    autoNominationSuggestionsEnabled: Boolean(autoNominationSuggestions),
     myBudget: latest.myBudget,
   });
 
@@ -359,6 +378,10 @@ export function startAuctionPracticeHelper({
           state: autoBidController.getState(),
           history: autoBidController.getHistory(),
         },
+        autoNominationSuggestions: {
+          enabled: Boolean(autoNominationSuggestions),
+          latest: buildNominationSuggestion(watcher.getSales()),
+        },
         nomination: latestNomination,
         recommendation: latestRecommendation,
         nominationRecommendation: buildNominationSuggestion(watcher.getSales()),
@@ -394,6 +417,6 @@ if (typeof window !== 'undefined') {
   };
 
   console.log(
-    `Fantasy Auction Helper ${HELPER_VERSION} loaded. Run FantasyAuctionHelper.start() for recommendations or FantasyAuctionHelper.start({ autoBid: true }) for practice auto-bidding.`,
+    `Fantasy Auction Helper ${HELPER_VERSION} loaded. Run FantasyAuctionHelper.start() for recommendations or FantasyAuctionHelper.start({ autoBid: true }) for practice auto-bidding plus live nomination suggestions.`,
   );
 }
