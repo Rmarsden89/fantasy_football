@@ -69,6 +69,29 @@ function urgencyForSupply(summary) {
   return 'LOW';
 }
 
+function rb2RoleFloor({ urgency, supply, otherSupply }) {
+  let floor = urgency === 'HIGH'
+    ? 1
+    : urgency === 'MEDIUM'
+      ? 0.95
+      : urgency === 'NORMAL'
+        ? 0.9
+        : 0.85;
+
+  // Relative scarcity matters too. If the usable RB pool is drying up much
+  // faster than WR, treat the second RB as a more valuable FLEX option now,
+  // even if one or both starting WR slots are still open.
+  if (
+    otherSupply
+    && supply.usableRemaining <= otherSupply.usableRemaining / 2
+    && supply.usableRemaining <= 8
+  ) {
+    floor = Math.min(1, floor + 0.03);
+  }
+
+  return floor;
+}
+
 function preferenceFloor({ position, counts, flexIsOpen, supply, otherSupply, config }) {
   const wrStartersOpen = Math.max(0, (config?.roster?.WR ?? 0) - (counts.WR ?? 0));
   const rb2Open = flexIsOpen && (counts.RB ?? 0) === (config?.roster?.RB ?? 0);
@@ -81,31 +104,29 @@ function preferenceFloor({ position, counts, flexIsOpen, supply, otherSupply, co
       return 0.95;
     }
     if (flexIsOpen) {
-      if (urgency === 'HIGH') return 0.97;
-      if (urgency === 'MEDIUM') return 0.93;
-      return 0.88;
+      if (urgency === 'HIGH') return 0.95;
+      if (urgency === 'MEDIUM') return 0.9;
+      return 0.85;
     }
     return 0;
   }
 
   if (position === 'RB' && rb2Open) {
-    let floor = urgency === 'HIGH' ? 1 : urgency === 'MEDIUM' ? 0.97 : 0.93;
-    // With WR1/WR2 filled, a usable RB2 is our preferred default FLEX because
-    // weekly workload is generally more stable. This is only a small nudge;
-    // a thin WR board can still outrank RB through its own scarcity signal.
-    if (wrStartersOpen === 0) floor = Math.min(1, floor + 0.03);
-
-    if (
-      otherSupply
-      && supply.usableRemaining <= otherSupply.usableRemaining / 2
-      && supply.usableRemaining <= 8
-    ) {
-      floor = Math.min(1, floor + 0.03);
-    }
-    return floor;
+    return rb2RoleFloor({ urgency, supply, otherSupply });
   }
 
   return 0;
+}
+
+function roleMultiplierFloor({ position, counts, flexIsOpen, supply, otherSupply, config }) {
+  const rb2Open = flexIsOpen && (counts.RB ?? 0) === (config?.roster?.RB ?? 0);
+  if (position !== 'RB' || !rb2Open) return 0;
+
+  return rb2RoleFloor({
+    urgency: urgencyForSupply(supply),
+    supply,
+    otherSupply,
+  });
 }
 
 export function buildPositionScarcitySignal({
@@ -120,6 +141,7 @@ export function buildPositionScarcitySignal({
       active: false,
       urgency: 'NONE',
       preferenceFloor: 0,
+      roleMultiplierFloor: 0,
       reason: null,
       supply: null,
       comparisonSupply: null,
@@ -146,6 +168,14 @@ export function buildPositionScarcitySignal({
     otherSupply: comparisonSupply,
     config,
   });
+  const roleFloor = roleMultiplierFloor({
+    position,
+    counts,
+    flexIsOpen,
+    supply,
+    otherSupply: comparisonSupply,
+    config,
+  });
 
   const wrStartersOpen = Math.max(0, (config?.roster?.WR ?? 0) - (counts.WR ?? 0));
   const rb2Open = flexIsOpen && (counts.RB ?? 0) === (config?.roster?.RB ?? 0);
@@ -155,6 +185,7 @@ export function buildPositionScarcitySignal({
     active,
     urgency: active ? urgency : 'LOW',
     preferenceFloor: active ? Number(floor.toFixed(3)) : 0,
+    roleMultiplierFloor: active ? Number(roleFloor.toFixed(3)) : 0,
     flexOpen: flexIsOpen,
     wrStartersOpen,
     rb2Open,
