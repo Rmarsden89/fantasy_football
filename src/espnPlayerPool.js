@@ -27,10 +27,32 @@ function projectedPoints(player) {
   return projected[0]?.appliedTotal ?? null;
 }
 
-function draftRank(player) {
+function preferredDraftRank(player) {
   const ranks = player.draftRanksByRankType || {};
-  const preferred = ranks.SUPERFLEX || ranks.PPR || ranks.STANDARD;
-  return preferred?.rank ?? preferred?.auctionValue ?? null;
+  return ranks.PPR || ranks.STANDARD || ranks.SUPERFLEX || null;
+}
+
+function draftRank(player) {
+  const preferred = preferredDraftRank(player);
+  return preferred?.rank ?? null;
+}
+
+function preDraftAuctionValue(entry, player) {
+  // In a live ESPN salary-cap league, entry.draftAuctionValue is the closest
+  // player-pool equivalent to the nominee card's PRE-DRAFT VAL. Prefer it when
+  // ESPN supplies a positive value. Generic rank auction values are only a
+  // fallback for contexts where draftAuctionValue is unavailable.
+  const liveLeagueValue = Number(entry?.draftAuctionValue);
+  if (Number.isFinite(liveLeagueValue) && liveLeagueValue > 0) {
+    return { value: liveLeagueValue, source: 'espn-league-draft-auction-value' };
+  }
+
+  const rankValue = Number(preferredDraftRank(player)?.auctionValue);
+  if (Number.isFinite(rankValue) && rankValue > 0) {
+    return { value: rankValue, source: 'espn-draft-rank-auction-value' };
+  }
+
+  return { value: null, source: null };
 }
 
 function experienceYears(player) {
@@ -48,6 +70,7 @@ export function normalizeEspnPlayer(entry, season = 2026) {
   const player = entry.player || entry;
   const position = POSITION_BY_DEFAULT_ID[player.defaultPositionId] || null;
   const nflTeamId = player.proTeamId;
+  const preDraftValue = preDraftAuctionValue(entry, player);
 
   return {
     id: entry.id ?? player.id,
@@ -60,6 +83,8 @@ export function normalizeEspnPlayer(entry, season = 2026) {
     percentOwned: player.ownership?.percentOwned ?? null,
     averageDraftPosition: player.ownership?.averageDraftPosition ?? null,
     auctionValueAverage: player.ownership?.auctionValueAverage ?? null,
+    preDraftAuctionValue: preDraftValue.value,
+    preDraftAuctionValueSource: preDraftValue.source,
     experienceYears: experienceYears(player),
     injuryStatus: player.injuryStatus ?? null,
     seasonOutlook: player.seasonOutlook ?? '',
