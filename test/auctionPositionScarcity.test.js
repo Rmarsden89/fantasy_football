@@ -4,8 +4,17 @@ import assert from 'node:assert/strict';
 import { AUCTION_LEAGUE_CONFIG } from '../src/auction/config.js';
 import { buildPositionScarcitySignal } from '../src/auction/positionScarcity.js';
 
-function player(name, position, auctionValueAverage) {
-  return { name, position, auctionValueAverage, raw: {} };
+function player(name, position, auctionValueAverage, preDraftAuctionValue = null) {
+  return {
+    name,
+    position,
+    auctionValueAverage,
+    preDraftAuctionValue,
+    preDraftAuctionValueSource: preDraftAuctionValue == null
+      ? null
+      : 'espn-league-draft-auction-value',
+    raw: {},
+  };
 }
 
 const keepers = [
@@ -157,4 +166,31 @@ test('healthy RB supply does not force RB2 ahead of open WR starters', () => {
   assert.equal(signal.active, true);
   assert.equal(signal.wrStartersOpen, 2);
   assert.ok(signal.roleMultiplierFloor < 1);
+});
+
+
+test('scarcity prefers league pre-draft value over low ownership auction average', () => {
+  const pool = [
+    player('RB A', 'RB', 3.5, 22),
+    player('RB B', 'RB', 2.2, 18),
+    player('RB C', 'RB', 1.1, 14),
+    player('WR A', 'WR', 4.0, 30),
+    player('WR B', 'WR', 3.0, 24),
+    player('WR C', 'WR', 2.0, 20),
+    player('WR D', 'WR', 1.5, 18),
+  ];
+
+  const signal = buildPositionScarcitySignal({
+    position: 'RB',
+    roster: keepers,
+    playerPool: pool,
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(signal.supply.usableRemaining, 3);
+  assert.deepEqual(signal.supply.topRemainingValues, [22, 18, 14]);
+  assert.equal(
+    signal.supply.valueSourceCounts['espn-league-draft-auction-value'],
+    3,
+  );
 });
