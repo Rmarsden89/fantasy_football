@@ -40,15 +40,41 @@ function remainingAtPosition({ position, playerPool, sales, roster }) {
   });
 }
 
+function scarcityMarketValue(player) {
+  const leaguePreDraft = Number(player?.preDraftAuctionValue);
+  if (Number.isFinite(leaguePreDraft) && leaguePreDraft > 0) {
+    return {
+      value: leaguePreDraft,
+      source: player?.preDraftAuctionValueSource ?? 'espn-league-draft-auction-value',
+    };
+  }
+
+  const ownershipAverage = Number(player?.auctionValueAverage);
+  if (Number.isFinite(ownershipAverage) && ownershipAverage >= 0) {
+    return { value: ownershipAverage, source: 'espn-auction-average-fallback' };
+  }
+
+  return { value: null, source: null };
+}
+
 function supplySummary({ position, playerPool, sales, roster, config }) {
   const settings = config?.auctionStrategy?.positionScarcity ?? {};
   const usableFloor = Number(settings.usableMarketValue ?? 12);
   const strongFloor = Number(settings.strongMarketValue ?? 20);
   const remaining = remainingAtPosition({ position, playerPool, sales, roster });
-  const values = remaining
-    .map((player) => Number(player?.auctionValueAverage))
-    .filter((value) => Number.isFinite(value) && value >= 0)
-    .sort((a, b) => b - a);
+  const valuedPlayers = remaining
+    .map((player) => ({
+      name: player.name,
+      ...scarcityMarketValue(player),
+    }))
+    .filter(({ value }) => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => b.value - a.value);
+  const values = valuedPlayers.map(({ value }) => value);
+  const valueSourceCounts = valuedPlayers.reduce((counts, { source }) => {
+    const key = source ?? 'unknown';
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
 
   return {
     position,
@@ -58,6 +84,8 @@ function supplySummary({ position, playerPool, sales, roster, config }) {
     usableFloor,
     strongFloor,
     topRemainingValues: values.slice(0, 8),
+    topRemainingPlayers: valuedPlayers.slice(0, 8),
+    valueSourceCounts,
   };
 }
 
