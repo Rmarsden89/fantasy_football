@@ -176,7 +176,22 @@ export function recommendBid({
   const starterPremiumReserveAfterWin = reserveTargetForMissingStarters(countsAfterWin, config);
   const baseStrategicReserveAfterWin = baseReserveAfterWin + starterPremiumReserveAfterWin;
 
-  const roleMultiplier = Number(config.auctionStrategy?.roleValueMultiplier?.[role] ?? 1);
+  const baseRoleMultiplier = Number(config.auctionStrategy?.roleValueMultiplier?.[role] ?? 1);
+
+  const livePositionScarcity = buildPositionScarcitySignal({
+    position,
+    roster: currentRoster,
+    sales,
+    playerPool,
+    config,
+  });
+
+  // A second RB can become a higher-value FLEX before WR1/WR2 are filled when
+  // the live RB pool is drying up. Scarcity is allowed to restore FLEX value
+  // toward starter value, but never above the intrinsic market anchor.
+  const roleMultiplier = livePositionScarcity.active
+    ? Math.max(baseRoleMultiplier, Number(livePositionScarcity.roleMultiplierFloor ?? 0))
+    : baseRoleMultiplier;
   const roleAdjustedMarketValue = hasMarketValue
     ? Math.floor(marketValue * Math.max(0, roleMultiplier))
     : null;
@@ -189,14 +204,6 @@ export function recommendBid({
     sales,
     marketValue: hasMarketValue ? marketValue : null,
     experienceYears: hasExperienceYears ? Number(nomination.experienceYears) : null,
-    config,
-  });
-
-  const livePositionScarcity = buildPositionScarcitySignal({
-    position,
-    roster: currentRoster,
-    sales,
-    playerPool,
     config,
   });
 
@@ -292,6 +299,8 @@ export function recommendBid({
     positionHave: rosterSlot ? (currentCounts[rosterSlot] ?? 0) : null,
     positionLimit: Number.isFinite(positionLimit) ? positionLimit : null,
     roleAdjustedMarketValue,
+    baseRoleMultiplier,
+    effectiveRoleMultiplier: roleMultiplier,
     cheatSheetTier: cheatSheetContext?.tier ?? 'UNRATED',
     cheatSheetTargetRole: cheatSheetContext?.targetRole ?? null,
     cheatSheetPreferenceMultiplier: preferenceMultiplier,
