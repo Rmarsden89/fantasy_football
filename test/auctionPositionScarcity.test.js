@@ -95,3 +95,66 @@ test('sold players are removed from usable supply counts', () => {
 
   assert.equal(signal.supply.usableRemaining, 2);
 });
+
+
+test('RB2 scarcity can raise FLEX value before both WR starters are filled', () => {
+  const roster = [
+    ...keepers,
+    { playerName: 'Terry McLaurin', position: 'WR', price: 22 },
+  ];
+  const pool = [
+    player('RB A', 'RB', 24),
+    player('RB B', 'RB', 16),
+    player('RB C', 'RB', 12),
+    player('WR A', 'WR', 32),
+    player('WR B', 'WR', 28),
+    player('WR C', 'WR', 24),
+    player('WR D', 'WR', 20),
+    player('WR E', 'WR', 18),
+    player('WR F', 'WR', 16),
+    player('WR G', 'WR', 14),
+    player('WR H', 'WR', 12),
+  ];
+
+  const signal = buildPositionScarcitySignal({
+    position: 'RB',
+    roster,
+    playerPool: pool,
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(signal.active, true);
+  assert.equal(signal.rb2Open, true);
+  assert.equal(signal.wrStartersOpen, 1);
+  assert.equal(signal.urgency, 'HIGH');
+  assert.equal(signal.roleMultiplierFloor, 1);
+});
+
+test('healthy RB supply does not force RB2 ahead of open WR starters', () => {
+  const roster = [...keepers];
+  const pool = [
+    player('RB A', 'RB', 30),
+    player('RB B', 'RB', 27),
+    player('RB C', 'RB', 24),
+    player('RB D', 'RB', 22),
+    player('RB E', 'RB', 20),
+    player('RB F', 'RB', 18),
+    player('RB G', 'RB', 16),
+    player('RB H', 'RB', 14),
+    player('RB I', 'RB', 12),
+    player('WR A', 'WR', 30),
+    player('WR B', 'WR', 24),
+    player('WR C', 'WR', 20),
+  ];
+
+  const signal = buildPositionScarcitySignal({
+    position: 'RB',
+    roster,
+    playerPool: pool,
+    config: AUCTION_LEAGUE_CONFIG,
+  });
+
+  assert.equal(signal.active, true);
+  assert.equal(signal.wrStartersOpen, 2);
+  assert.ok(signal.roleMultiplierFloor < 1);
+});
